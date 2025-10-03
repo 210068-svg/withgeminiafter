@@ -1,265 +1,315 @@
 "use client"
 
-import { useEffect, useState } from "react"
-import { MapPin, Navigation, Play, Square } from "lucide-react"
+import { useEffect, useState, useCallback } from "react"
+import { MapPin, Play, Square, Loader2 } from "lucide-react"
 import { Button } from "@/components/ui/button"
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
-import { recordLocation } from "@/app/actions/location"
-import { getDevices } from "@/app/actions/devices"
-import { subscribeToLocationUpdates } from "@/lib/supabase-client"
-import { useToast } from "@/hooks/use-toast"
-
-interface Device {
-  id: string
-  device_name: string
-  last_location_lat: number | null
-  last_location_lng: number | null
-  last_location_time: string | null
-  is_active: boolean
-}
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import { getSupabaseClient } from "@/lib/supabase-client"
+import { recordLocation } from "./actions/location"
 
 interface MapComponentProps {
   userId: string
+  deviceId?: string
+  showGeofence?: boolean
 }
 
-export default function MapComponent({ userId }: MapComponentProps) {
-  const [devices, setDevices] = useState<Device[]>([])
-  const [selectedDevice, setSelectedDevice] = useState<string | null>(null)
+export default function MapComponent({ userId, deviceId, showGeofence = true }: MapComponentProps) {
   const [isTracking, setIsTracking] = useState(false)
-  const [trackingInterval, setTrackingInterval] = useState<NodeJS.Timeout | null>(null)
-  const { toast } = useToast()
+  const [currentLocation, setCurrentLocation] = useState<{ lat: number; lng: number } | null>(null)
+  const [devices, setDevices] = useState<any[]>([])
+  const [geofences, setGeofences] = useState<any[]>([])
+  const [error, setError] = useState<string | null>(null)
+  const [loading, setLoading] = useState(true)
 
-  // デバイス一覧を取得
+  // デバイスとジオフェンスを取得
   useEffect(() => {
-    const loadDevices = async () => {
-      const result = await getDevices(userId)
-      if (result.success && result.data) {
-        setDevices(result.data)
-        if (result.data.length > 0 && !selectedDevice) {
-          setSelectedDevice(result.data[0].id)
+    const fetchData = async () => {
+      const supabase = getSupabaseClient()
+
+      // デバイスを取得
+      const { data: devicesData, error: devicesError } = await supabase
+        .from("devices")
+        .select("*")
+        .eq("user_id", userId)
+        .eq("is_active", true)
+
+      if (devicesError) {
+        console.error("Error fetching devices:", devicesError)
+      } else {
+        setDevices(devicesData || [])
+        if (devicesData && devicesData.length > 0 && devicesData[0].last_location_lat) {
+          setCurrentLocation({
+            lat: devicesData[0].last_location_lat,
+            lng: devicesData[0].last_location_lng,
+          })
         }
       }
-    }
-    loadDevices()
-  }, [userId, selectedDevice])
 
-  // リアルタイム位置更新を購読
-  useEffect(() => {
-    if (!selectedDevice) return
+      // ジオフェンスを取得
+      if (showGeofence) {
+        const { data: geofencesData, error: geofencesError } = await supabase
+          .from("geofences")
+          .select("*")
+          .eq("user_id", userId)
+          .eq("is_active", true)
 
-    const channel = subscribeToLocationUpdates(selectedDevice, (payload) => {
-      if (payload.eventType === "INSERT" || payload.event === "INSERT") {
-        const newLocation = payload.new
-        setDevices((prev) =>
-          prev.map((d) =>
-            d.id === selectedDevice
-              ? {
-                  ...d,
-                  last_location_lat: newLocation.latitude,
-                  last_location_lng: newLocation.longitude,
-                  last_location_time: newLocation.timestamp,
-                }
-              : d,
-          ),
-        )
-
-        toast({
-          title: "位置情報を更新しました",
-          description: `緯度: ${newLocation.latitude.toFixed(6)}, 経度: ${newLocation.longitude.toFixed(6)}`,
-        })
+        if (geofencesError) {
+          console.error("Error fetching geofences:", geofencesError)
+        } else {
+          setGeofences(geofencesData || [])
+        }
       }
-    })
 
-    return () => {
-      channel.unsubscribe()
-    }
-  }, [selectedDevice, toast])
-
-  // 自動追跡を開始
-  const handleStartTracking = async () => {
-    if (!selectedDevice) return
-
-    setIsTracking(true)
-
-    // 10秒ごとに位置情報を記録（シミュレーション）
-    const interval = setInterval(async () => {
-      const selectedDeviceData = devices.find((d) => d.id === selectedDevice)
-      if (!selectedDeviceData) return
-
-      // ランダムな位置変化をシミュレート
-      const baseLat = selectedDeviceData.last_location_lat || 35.6895
-      const baseLng = selectedDeviceData.last_location_lng || 139.6917
-      const newLat = baseLat + (Math.random() - 0.5) * 0.001
-      const newLng = baseLng + (Math.random() - 0.5) * 0.001
-
-      await recordLocation(selectedDevice, newLat, newLng, Math.random() * 10 + 5)
-    }, 10000)
-
-    setTrackingInterval(interval)
-
-    toast({
-      title: "追跡を開始しました",
-      description: "10秒ごとに位置情報を記録します",
-    })
-  }
-
-  const handleStopTracking = async () => {
-    if (trackingInterval) {
-      clearInterval(trackingInterval)
-      setTrackingInterval(null)
+      setLoading(false)
     }
 
-    setIsTracking(false)
-    toast({
-      title: "追跡を停止しました",
-    })
-  }
+    fetchData()
+  }, [userId, showGeofence])
 
-  // 現在地を手動で記録
-  const handleRecordCurrentLocation = async () => {
-    if (!selectedDevice) return
+  // Realtimeサブスクリプション
+  useEffect(() => {
+    const supabase = getSupabaseClient()
 
-    if ("geolocation" in navigator) {
-      navigator.geolocation.getCurrentPosition(
-        async (position) => {
-          const { latitude, longitude, accuracy } = position.coords
-          const result = await recordLocation(selectedDevice, latitude, longitude, accuracy)
-
-          if (result.success) {
-            toast({
-              title: "位置情報を記録しました",
-              description: `緯度: ${latitude.toFixed(6)}, 経度: ${longitude.toFixed(6)}`,
+    const channel = supabase
+      .channel("devices-channel")
+      .on(
+        "postgres_changes",
+        {
+          event: "UPDATE",
+          schema: "public",
+          table: "devices",
+          filter: `user_id=eq.${userId}`,
+        },
+        (payload) => {
+          const updatedDevice = payload.new as any
+          if (updatedDevice.last_location_lat && updatedDevice.last_location_lng) {
+            setCurrentLocation({
+              lat: updatedDevice.last_location_lat,
+              lng: updatedDevice.last_location_lng,
             })
-          } else {
-            toast({
-              title: "エラー",
-              description: result.error,
-              variant: "destructive",
-            })
+            setDevices((prev) =>
+              prev.map((device) => (device.id === updatedDevice.id ? { ...device, ...updatedDevice } : device)),
+            )
           }
         },
-        (error) => {
-          toast({
-            title: "位置情報の取得に失敗しました",
-            description: error.message,
-            variant: "destructive",
-          })
-        },
       )
-    } else {
-      toast({
-        title: "エラー",
-        description: "このブラウザは位置情報をサポートしていません",
-        variant: "destructive",
-      })
-    }
-  }
+      .subscribe()
 
-  const selectedDeviceData = devices.find((d) => d.id === selectedDevice)
+    return () => {
+      supabase.removeChannel(channel)
+    }
+  }, [userId])
+
+  // 位置情報の追跡
+  const startTracking = useCallback(() => {
+    if (!devices || devices.length === 0) {
+      setError("デバイスが登録されていません")
+      return
+    }
+
+    const targetDeviceId = deviceId || devices[0].id
+
+    setIsTracking(true)
+    setError(null)
+
+    // シミュレーション: 定期的に位置情報を更新
+    const interval = setInterval(() => {
+      // 東京駅付近をランダムに移動
+      const baseLat = 35.6812
+      const baseLng = 139.7671
+      const randomLat = baseLat + (Math.random() - 0.5) * 0.01
+      const randomLng = baseLng + (Math.random() - 0.5) * 0.01
+
+      recordLocation(targetDeviceId, randomLat, randomLng, 10).then((result) => {
+        if (!result.success) {
+          console.error("Location recording error:", result.error)
+          setError(result.error || "位置情報の記録に失敗しました")
+          stopTracking()
+        }
+      })
+    }, 10000) // 10秒ごと
+
+    // クリーンアップ関数を返す
+    return () => {
+      clearInterval(interval)
+      setIsTracking(false)
+    }
+  }, [devices, deviceId])
+
+  const stopTracking = useCallback(() => {
+    setIsTracking(false)
+  }, [])
+
+  // 追跡の開始/停止
+  useEffect(() => {
+    let cleanup: (() => void) | undefined
+
+    if (isTracking) {
+      cleanup = startTracking()
+    }
+
+    return () => {
+      if (cleanup) {
+        cleanup()
+      }
+    }
+  }, [isTracking, startTracking])
+
+  if (loading) {
+    return (
+      <Card>
+        <CardHeader>
+          <CardTitle>位置情報マップ</CardTitle>
+          <CardDescription>リアルタイムで位置を追跡</CardDescription>
+        </CardHeader>
+        <CardContent>
+          <div className="flex items-center justify-center h-96">
+            <Loader2 className="h-8 w-8 animate-spin text-emerald-600" />
+          </div>
+        </CardContent>
+      </Card>
+    )
+  }
 
   return (
     <Card>
       <CardHeader>
-        <CardTitle className="flex items-center gap-2">
-          <MapPin className="h-5 w-5" />
-          位置情報マップ
-        </CardTitle>
-      </CardHeader>
-      <CardContent className="space-y-4">
-        {/* デバイス選択 */}
-        {devices.length > 0 && (
+        <div className="flex items-center justify-between">
           <div>
-            <label className="text-sm font-medium mb-2 block">デバイス選択</label>
-            <select
-              value={selectedDevice || ""}
-              onChange={(e) => setSelectedDevice(e.target.value)}
-              className="w-full p-2 border rounded-md"
-            >
-              {devices.map((device) => (
-                <option key={device.id} value={device.id}>
-                  {device.device_name} {device.is_active ? "🟢" : "⚪"}
-                </option>
-              ))}
-            </select>
+            <CardTitle>位置情報マップ</CardTitle>
+            <CardDescription>リアルタイムで位置を追跡</CardDescription>
           </div>
-        )}
-
-        {/* 地図表示エリア */}
-        <div className="h-96 bg-gradient-to-br from-emerald-50 to-blue-50 rounded-lg flex items-center justify-center relative overflow-hidden border-2 border-emerald-200">
-          {selectedDeviceData?.last_location_lat && selectedDeviceData?.last_location_lng ? (
-            <div className="absolute inset-0 flex items-center justify-center">
-              <div className="text-center z-10">
-                <div className="relative">
-                  {isTracking && (
-                    <div className="absolute inset-0 animate-ping">
-                      <MapPin className="h-12 w-12 text-emerald-600 mx-auto" />
-                    </div>
-                  )}
-                  <MapPin className="h-12 w-12 text-emerald-600 mx-auto mb-2 relative" />
-                </div>
-                <p className="font-semibold text-lg">{selectedDeviceData.device_name}</p>
-                <div className="bg-white/90 backdrop-blur-sm rounded-lg p-4 mt-2 shadow-lg">
-                  <p className="text-sm text-gray-600 font-medium mb-1">現在位置</p>
-                  <p className="text-xs text-gray-700">緯度: {selectedDeviceData.last_location_lat.toFixed(6)}</p>
-                  <p className="text-xs text-gray-700">経度: {selectedDeviceData.last_location_lng.toFixed(6)}</p>
-                  {selectedDeviceData.last_location_time && (
-                    <p className="text-xs text-gray-500 mt-2">
-                      更新: {new Date(selectedDeviceData.last_location_time).toLocaleString("ja-JP")}
-                    </p>
-                  )}
-                </div>
-              </div>
-
-              {/* 円形のジオフェンス表示（装飾） */}
-              <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-                <div className="w-64 h-64 border-4 border-emerald-300 rounded-full opacity-30 animate-pulse"></div>
-                <div className="absolute w-48 h-48 border-4 border-emerald-400 rounded-full opacity-40"></div>
-              </div>
-            </div>
-          ) : (
-            <div className="text-center text-gray-500">
-              <MapPin className="h-12 w-12 mx-auto mb-2 opacity-50" />
-              <p>位置情報がありません</p>
-              <p className="text-xs mt-1">デバイスを登録してください</p>
-            </div>
-          )}
-        </div>
-
-        {/* コントロールボタン */}
-        {selectedDevice && (
           <div className="flex gap-2">
-            <Button onClick={handleRecordCurrentLocation} className="flex-1 bg-transparent" variant="outline">
-              <Navigation className="h-4 w-4 mr-2" />
-              現在地を記録
-            </Button>
-
             {!isTracking ? (
-              <Button onClick={handleStartTracking} className="flex-1">
-                <Play className="h-4 w-4 mr-2" />
+              <Button onClick={() => setIsTracking(true)} size="sm" className="gap-2">
+                <Play className="h-4 w-4" />
                 追跡開始
               </Button>
             ) : (
-              <Button onClick={handleStopTracking} className="flex-1" variant="destructive">
-                <Square className="h-4 w-4 mr-2" />
+              <Button onClick={stopTracking} variant="destructive" size="sm" className="gap-2">
+                <Square className="h-4 w-4" />
                 追跡停止
               </Button>
             )}
           </div>
+        </div>
+      </CardHeader>
+      <CardContent>
+        {error && (
+          <div className="mb-4 p-3 bg-red-50 border border-red-200 rounded-lg text-sm text-red-800">{error}</div>
         )}
 
-        {isTracking && (
-          <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 text-sm text-blue-900">
-            <p className="flex items-center gap-2">
-              <span className="animate-pulse">🔴</span>
-              追跡中 - 10秒ごとに位置情報を自動記録しています
-            </p>
+        <div className="relative h-96 bg-gray-100 rounded-lg overflow-hidden">
+          {/* 地図のプレースホルダー */}
+          <div className="absolute inset-0 flex items-center justify-center">
+            <div className="text-center">
+              <MapPin className="h-12 w-12 text-gray-400 mx-auto mb-2" />
+              <p className="text-gray-500 text-sm">地図表示エリア</p>
+              {currentLocation && (
+                <p className="text-xs text-gray-400 mt-2">
+                  緯度: {currentLocation.lat.toFixed(6)}, 経度: {currentLocation.lng.toFixed(6)}
+                </p>
+              )}
+            </div>
+          </div>
+
+          {/* デバイスマーカー */}
+          {devices.map((device) => (
+            <div
+              key={device.id}
+              className="absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2"
+              style={{
+                animation: isTracking ? "pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite" : "none",
+              }}
+            >
+              <div className="relative">
+                <div className="absolute -inset-2 bg-emerald-400 rounded-full opacity-75 animate-ping"></div>
+                <MapPin className="relative h-8 w-8 text-emerald-600 fill-emerald-200" />
+              </div>
+            </div>
+          ))}
+
+          {/* ジオフェンス円 */}
+          {showGeofence &&
+            geofences.map((geofence, index) => (
+              <div
+                key={geofence.id}
+                className="absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2"
+                style={{
+                  width: `${Math.min(geofence.radius / 5, 200)}px`,
+                  height: `${Math.min(geofence.radius / 5, 200)}px`,
+                }}
+              >
+                <div
+                  className={`w-full h-full rounded-full border-2 ${
+                    geofence.area_type === "safe"
+                      ? "border-emerald-400 bg-emerald-100/30"
+                      : "border-red-400 bg-red-100/30"
+                  }`}
+                ></div>
+                <div className="absolute top-0 left-1/2 transform -translate-x-1/2 -translate-y-full mb-2">
+                  <span className="text-xs font-medium bg-white px-2 py-1 rounded shadow">{geofence.name}</span>
+                </div>
+              </div>
+            ))}
+
+          {/* 追跡ステータス */}
+          {isTracking && (
+            <div className="absolute top-4 left-4 bg-emerald-600 text-white px-3 py-1 rounded-full text-xs font-medium flex items-center gap-2">
+              <div className="w-2 h-2 bg-white rounded-full animate-pulse"></div>
+              追跡中
+            </div>
+          )}
+        </div>
+
+        {/* デバイス情報 */}
+        {devices.length > 0 && (
+          <div className="mt-4 space-y-2">
+            {devices.map((device) => (
+              <div key={device.id} className="p-3 bg-gray-50 rounded-lg">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <p className="font-medium text-sm">{device.device_name}</p>
+                    <p className="text-xs text-gray-500">
+                      最終更新:{" "}
+                      {device.last_location_time
+                        ? new Date(device.last_location_time).toLocaleString("ja-JP")
+                        : "未取得"}
+                    </p>
+                  </div>
+                  <div className="text-right">
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs text-gray-500">バッテリー</span>
+                      <span className="text-sm font-medium">{device.battery_level || 0}%</span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            ))}
           </div>
         )}
 
-        {devices.length === 0 && (
-          <div className="bg-amber-50 border border-amber-200 rounded-lg p-4 text-sm text-amber-900">
-            <p className="font-medium mb-1">デバイスが登録されていません</p>
-            <p className="text-xs">セットアップウィザードからデバイスを登録してください</p>
+        {/* ジオフェンス情報 */}
+        {showGeofence && geofences.length > 0 && (
+          <div className="mt-4">
+            <h3 className="text-sm font-medium mb-2">設定エリア</h3>
+            <div className="space-y-2">
+              {geofences.map((geofence) => (
+                <div key={geofence.id} className="p-2 bg-gray-50 rounded text-xs">
+                  <div className="flex items-center justify-between">
+                    <span className="font-medium">{geofence.name}</span>
+                    <span
+                      className={`px-2 py-0.5 rounded-full ${
+                        geofence.area_type === "safe" ? "bg-emerald-100 text-emerald-700" : "bg-red-100 text-red-700"
+                      }`}
+                    >
+                      {geofence.area_type === "safe" ? "安全エリア" : "危険エリア"}
+                    </span>
+                  </div>
+                  <p className="text-gray-500 mt-1">半径: {geofence.radius}m</p>
+                </div>
+              ))}
+            </div>
           </div>
         )}
       </CardContent>

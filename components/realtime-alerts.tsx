@@ -1,9 +1,9 @@
 "use client"
 
 import { useEffect, useState } from "react"
-import { Bell, X } from "lucide-react"
-import { subscribeToAlerts } from "@/lib/supabase-client"
-import { useToast } from "@/hooks/use-toast"
+import { X, AlertCircle, AlertTriangle, Info } from "lucide-react"
+import { getSupabaseClient } from "@/lib/supabase-client"
+import { Button } from "@/components/ui/button"
 
 interface Alert {
   id: string
@@ -22,105 +22,129 @@ interface RealtimeAlertsProps {
 export default function RealtimeAlerts({ userId }: RealtimeAlertsProps) {
   const [alerts, setAlerts] = useState<Alert[]>([])
   const [isVisible, setIsVisible] = useState(false)
-  const { toast } = useToast()
 
   useEffect(() => {
-    if (!userId) return
+    const supabase = getSupabaseClient()
 
-    const channel = subscribeToAlerts(userId, (payload) => {
-      if (payload.eventType === "INSERT" || payload.event === "INSERT") {
-        const newAlert = payload.new as Alert
-        setAlerts((prev) => [newAlert, ...prev].slice(0, 10))
-        setIsVisible(true)
+    // 既存のアラートを取得
+    const fetchAlerts = async () => {
+      const { data, error } = await supabase
+        .from("alerts")
+        .select("*")
+        .eq("user_id", userId)
+        .eq("is_resolved", false)
+        .order("created_at", { ascending: false })
+        .limit(5)
 
-        // トースト通知
-        toast({
-          title: getSeverityLabel(newAlert.severity),
-          description: newAlert.message,
-          variant: newAlert.severity === "critical" ? "destructive" : "default",
-        })
-
-        // ブラウザ通知
-        if ("Notification" in window && Notification.permission === "granted") {
-          new Notification(getSeverityLabel(newAlert.severity), {
-            body: newAlert.message,
-            icon: "/icon.png",
-            badge: "/badge.png",
-          })
-        }
+      if (error) {
+        console.error("Error fetching alerts:", error)
+        return
       }
-    })
 
-    // 通知権限をリクエスト
+      if (data && data.length > 0) {
+        setAlerts(data)
+        setIsVisible(true)
+      }
+    }
+
+    fetchAlerts()
+
+    // Realtimeサブスクリプション
+    const channel = supabase
+      .channel("alerts-channel")
+      .on(
+        "postgres_changes",
+        {
+          event: "INSERT",
+          schema: "public",
+          table: "alerts",
+          filter: `user_id=eq.${userId}`,
+        },
+        (payload) => {
+          const newAlert = payload.new as Alert
+          setAlerts((prev) => [newAlert, ...prev.slice(0, 4)])
+          setIsVisible(true)
+
+          // ブラウザ通知を表示
+          if ("Notification" in window && Notification.permission === "granted") {
+            new Notification("新しいアラート", {
+              body: newAlert.message,
+              icon: "/icon.png",
+              tag: newAlert.id,
+            })
+          }
+        },
+      )
+      .subscribe()
+
+    // 通知許可をリクエスト
     if ("Notification" in window && Notification.permission === "default") {
       Notification.requestPermission()
     }
 
     return () => {
-      channel.unsubscribe()
+      supabase.removeChannel(channel)
     }
-  }, [userId, toast])
+  }, [userId])
 
-  const getSeverityLabel = (severity: string) => {
+  const dismissAlert = (alertId: string) => {
+    setAlerts((prev) => prev.filter((alert) => alert.id !== alertId))
+    if (alerts.length <= 1) {
+      setIsVisible(false)
+    }
+  }
+
+  const getSeverityIcon = (severity: string) => {
     switch (severity) {
       case "critical":
-        return "🚨 緊急警告"
+        return <AlertCircle className="h-5 w-5 text-red-600" />
       case "high":
-        return "⚠️ 重要な通知"
+        return <AlertTriangle className="h-5 w-5 text-orange-600" />
       case "medium":
-        return "📢 お知らせ"
-      case "low":
-        return "ℹ️ 情報"
+        return <AlertTriangle className="h-5 w-5 text-yellow-600" />
       default:
-        return "通知"
+        return <Info className="h-5 w-5 text-blue-600" />
     }
   }
 
   const getSeverityColor = (severity: string) => {
     switch (severity) {
       case "critical":
-        return "bg-red-50 border-red-200 text-red-900"
+        return "bg-red-50 border-red-200"
       case "high":
-        return "bg-orange-50 border-orange-200 text-orange-900"
+        return "bg-orange-50 border-orange-200"
       case "medium":
-        return "bg-yellow-50 border-yellow-200 text-yellow-900"
-      case "low":
-        return "bg-blue-50 border-blue-200 text-blue-900"
+        return "bg-yellow-50 border-yellow-200"
       default:
-        return "bg-gray-50 border-gray-200 text-gray-900"
+        return "bg-blue-50 border-blue-200"
     }
   }
 
-  if (alerts.length === 0 || !isVisible) {
+  if (!isVisible || alerts.length === 0) {
     return null
   }
 
   return (
-    <div className="fixed top-20 right-4 z-50 w-80 max-h-[80vh] overflow-y-auto space-y-2">
-      <div className="flex items-center justify-between mb-2 bg-white p-2 rounded-lg shadow-lg">
-        <div className="flex items-center gap-2">
-          <Bell className="h-5 w-5" />
-          <span className="font-semibold">リアルタイム通知</span>
-        </div>
-        <button onClick={() => setIsVisible(false)} className="hover:bg-gray-100 p-1 rounded">
-          <X className="h-4 w-4" />
-        </button>
-      </div>
-
+    <div className="fixed top-4 right-4 z-50 space-y-2 max-w-md">
       {alerts.map((alert) => (
-        <div key={alert.id} className={`p-4 rounded-lg border-2 shadow-lg ${getSeverityColor(alert.severity)}`}>
-          <div className="flex items-start justify-between gap-2">
-            <div className="flex-1">
-              <p className="font-semibold mb-1">{getSeverityLabel(alert.severity)}</p>
-              <p className="text-sm">{alert.message}</p>
-              <p className="text-xs mt-2 opacity-70">{new Date(alert.created_at).toLocaleString("ja-JP")}</p>
+        <div
+          key={alert.id}
+          className={`${getSeverityColor(alert.severity)} border rounded-lg p-4 shadow-lg animate-in slide-in-from-right`}
+        >
+          <div className="flex items-start gap-3">
+            <div className="flex-shrink-0 mt-0.5">{getSeverityIcon(alert.severity)}</div>
+            <div className="flex-1 min-w-0">
+              <div className="flex items-start justify-between gap-2">
+                <div className="flex-1">
+                  <p className="font-semibold text-sm capitalize">{alert.alert_type.replace("_", " ")}</p>
+                  <p className="text-sm text-gray-700 mt-1">{alert.message}</p>
+                  <p className="text-xs text-gray-500 mt-2">{new Date(alert.created_at).toLocaleTimeString("ja-JP")}</p>
+                </div>
+                <Button variant="ghost" size="sm" className="h-6 w-6 p-0" onClick={() => dismissAlert(alert.id)}>
+                  <X className="h-4 w-4" />
+                </Button>
+              </div>
             </div>
-            <button
-              onClick={() => setAlerts((prev) => prev.filter((a) => a.id !== alert.id))}
-              className="hover:bg-black/10 p-1 rounded"
-            >
-              <X className="h-4 w-4" />
-            </button>
           </div>
         </div>
       ))}
