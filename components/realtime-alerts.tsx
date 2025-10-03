@@ -15,7 +15,11 @@ interface Alert {
   created_at: string
 }
 
-export function RealtimeAlerts({ userId }: { userId: string }) {
+interface RealtimeAlertsProps {
+  userId: string
+}
+
+export default function RealtimeAlerts({ userId }: RealtimeAlertsProps) {
   const [alerts, setAlerts] = useState<Alert[]>([])
   const [isVisible, setIsVisible] = useState(false)
   const { toast } = useToast()
@@ -24,7 +28,7 @@ export function RealtimeAlerts({ userId }: { userId: string }) {
     if (!userId) return
 
     const channel = subscribeToAlerts(userId, (payload) => {
-      if (payload.eventType === "INSERT") {
+      if (payload.eventType === "INSERT" || payload.event === "INSERT") {
         const newAlert = payload.new as Alert
         setAlerts((prev) => [newAlert, ...prev].slice(0, 10))
         setIsVisible(true)

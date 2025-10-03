@@ -3,39 +3,23 @@
 import { useEffect, useState } from "react"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
-import { MapPin, Bell, Clock, Shield, CheckCircle2 } from "lucide-react"
+import { MapPin, Bell, Clock, Shield, CheckCircle2, AlertTriangle, Smartphone } from "lucide-react"
 import Link from "next/link"
 import MapComponent from "./map-component"
 import RealtimeAlerts from "@/components/realtime-alerts"
-import { getSupabaseClient } from "@/lib/supabase-client"
 import { checkSetupStatus } from "./actions/setup"
 
 export default function Home() {
-  const [userId, setUserId] = useState<string>("demo-user-001")
-  const [deviceId, setDeviceId] = useState<string | null>(null)
-  const [setupComplete, setSetupComplete] = useState(false)
+  const [userId] = useState<string>("demo-user-001")
+  const [setupStatus, setSetupStatus] = useState<any>(null)
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
     const initializeApp = async () => {
-      // セットアップ状態をチェック
-      const setupStatus = await checkSetupStatus(userId)
+      const result = await checkSetupStatus(userId)
 
-      if (setupStatus.isComplete) {
-        setSetupComplete(true)
-
-        // デバイスIDを取得
-        const client = getSupabaseClient()
-        const { data: devices } = await client
-          .from("devices")
-          .select("id")
-          .eq("user_id", userId)
-          .eq("is_active", true)
-          .limit(1)
-
-        if (devices && devices.length > 0) {
-          setDeviceId(devices[0].id)
-        }
+      if (result.success) {
+        setSetupStatus(result.data)
       }
 
       setLoading(false)
@@ -46,7 +30,7 @@ export default function Home() {
 
   if (loading) {
     return (
-      <div className="min-h-screen flex items-center justify-center">
+      <div className="min-h-screen flex items-center justify-center bg-gradient-to-b from-emerald-50 to-white">
         <div className="text-center">
           <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-emerald-600 mx-auto mb-4"></div>
           <p className="text-gray-600">読み込み中...</p>
@@ -55,35 +39,82 @@ export default function Home() {
     )
   }
 
-  if (!setupComplete) {
+  if (!setupStatus?.isComplete) {
     return (
       <div className="min-h-screen bg-gradient-to-b from-emerald-50 to-white p-4 md:p-8">
         <div className="max-w-4xl mx-auto">
           <div className="text-center mb-8">
+            <Shield className="h-16 w-16 text-emerald-600 mx-auto mb-4" />
             <h1 className="text-4xl font-bold text-gray-900 mb-2">介護見守りアプリ</h1>
             <p className="text-gray-600">大切な方の安全を見守ります</p>
           </div>
 
           <Card className="border-2 border-emerald-200">
-            <CardHeader className="text-center">
+            <CardHeader className="text-center bg-amber-50">
+              <div className="flex items-center justify-center mb-2">
+                <AlertTriangle className="h-8 w-8 text-amber-600" />
+              </div>
               <CardTitle className="text-2xl">初期設定が必要です</CardTitle>
               <CardDescription>アプリを使用する前に、以下の設定を完了してください</CardDescription>
             </CardHeader>
-            <CardContent className="space-y-4">
-              <div className="bg-emerald-50 p-4 rounded-lg">
-                <h3 className="font-semibold mb-2 flex items-center">
-                  <CheckCircle2 className="h-5 w-5 mr-2 text-emerald-600" />
-                  必要な設定
+            <CardContent className="space-y-4 p-6">
+              <div className="space-y-3">
+                <div className="flex items-center gap-3 p-3 bg-white rounded-lg border">
+                  <Smartphone className="h-5 w-5 text-gray-600" />
+                  <div className="flex-1">
+                    <p className="font-medium">監視デバイスの登録</p>
+                    <p className="text-xs text-gray-500">位置情報を取得するデバイス</p>
+                  </div>
+                  {setupStatus?.hasDevice ? (
+                    <CheckCircle2 className="h-5 w-5 text-emerald-600" />
+                  ) : (
+                    <div className="w-5 h-5 border-2 border-gray-300 rounded-full"></div>
+                  )}
+                </div>
+
+                <div className="flex items-center gap-3 p-3 bg-white rounded-lg border">
+                  <Bell className="h-5 w-5 text-gray-600" />
+                  <div className="flex-1">
+                    <p className="font-medium">連絡先の設定</p>
+                    <p className="text-xs text-gray-500">アラートを受け取る連絡先</p>
+                  </div>
+                  {setupStatus?.hasContacts ? (
+                    <CheckCircle2 className="h-5 w-5 text-emerald-600" />
+                  ) : (
+                    <div className="w-5 h-5 border-2 border-gray-300 rounded-full"></div>
+                  )}
+                </div>
+
+                <div className="flex items-center gap-3 p-3 bg-white rounded-lg border">
+                  <MapPin className="h-5 w-5 text-gray-600" />
+                  <div className="flex-1">
+                    <p className="font-medium">安全エリアの設定</p>
+                    <p className="text-xs text-gray-500">ジオフェンスエリア</p>
+                  </div>
+                  {setupStatus?.hasGeofence ? (
+                    <CheckCircle2 className="h-5 w-5 text-emerald-600" />
+                  ) : (
+                    <div className="w-5 h-5 border-2 border-gray-300 rounded-full"></div>
+                  )}
+                </div>
+              </div>
+
+              <div className="bg-emerald-50 p-4 rounded-lg border border-emerald-200">
+                <h3 className="font-semibold mb-2 flex items-center text-emerald-900">
+                  <CheckCircle2 className="h-5 w-5 mr-2" />
+                  設定完了後の機能
                 </h3>
-                <ul className="space-y-2 ml-7 text-sm text-gray-600">
-                  <li>• 監視デバイスの登録</li>
-                  <li>• 連絡先の設定</li>
-                  <li>• 安全エリアの設定</li>
+                <ul className="space-y-1 ml-7 text-sm text-emerald-800">
+                  <li>• リアルタイム位置追跡</li>
+                  <li>• 安全エリア外アラート</li>
+                  <li>• 緊急時自動通知</li>
+                  <li>• 移動履歴レポート</li>
                 </ul>
               </div>
+
               <Link href="/setup">
                 <Button className="w-full" size="lg">
-                  初期設定を開始
+                  初期設定を開始する
                 </Button>
               </Link>
             </CardContent>
@@ -99,6 +130,7 @@ export default function Home() {
 
       <div className="max-w-6xl mx-auto space-y-6">
         <div className="text-center mb-8">
+          <Shield className="h-12 w-12 text-emerald-600 mx-auto mb-2" />
           <h1 className="text-4xl font-bold text-gray-900 mb-2">介護見守りアプリ</h1>
           <p className="text-gray-600">リアルタイムで位置情報を追跡</p>
         </div>
@@ -112,7 +144,7 @@ export default function Home() {
               </CardTitle>
             </CardHeader>
             <CardContent>
-              <p className="text-2xl font-bold text-emerald-600">追跡中</p>
+              <p className="text-2xl font-bold text-emerald-600">追跡可能</p>
               <p className="text-xs text-gray-500 mt-1">リアルタイム更新</p>
             </CardContent>
           </Card>
@@ -157,19 +189,11 @@ export default function Home() {
           </Card>
         </div>
 
-        <Card>
-          <CardHeader>
-            <CardTitle>リアルタイム位置情報</CardTitle>
-            <CardDescription>利用者の現在位置を地図上でリアルタイムに確認できます</CardDescription>
-          </CardHeader>
-          <CardContent>
-            <MapComponent showGeofence={true} deviceId={deviceId || undefined} userId={userId} />
-          </CardContent>
-        </Card>
+        <MapComponent userId={userId} />
 
         <div className="grid md:grid-cols-3 gap-4">
           <Link href="/alerts">
-            <Card className="hover:shadow-lg transition-shadow cursor-pointer">
+            <Card className="hover:shadow-lg transition-shadow cursor-pointer h-full">
               <CardHeader>
                 <CardTitle className="flex items-center">
                   <Bell className="h-5 w-5 mr-2" />
@@ -183,7 +207,7 @@ export default function Home() {
           </Link>
 
           <Link href="/history">
-            <Card className="hover:shadow-lg transition-shadow cursor-pointer">
+            <Card className="hover:shadow-lg transition-shadow cursor-pointer h-full">
               <CardHeader>
                 <CardTitle className="flex items-center">
                   <Clock className="h-5 w-5 mr-2" />
@@ -197,7 +221,7 @@ export default function Home() {
           </Link>
 
           <Link href="/geofence">
-            <Card className="hover:shadow-lg transition-shadow cursor-pointer">
+            <Card className="hover:shadow-lg transition-shadow cursor-pointer h-full">
               <CardHeader>
                 <CardTitle className="flex items-center">
                   <MapPin className="h-5 w-5 mr-2" />

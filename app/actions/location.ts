@@ -14,6 +14,7 @@ export async function recordLocation(deviceId: string, latitude: number, longitu
     const { data: device, error: deviceError } = await supabase.from("devices").select("*").eq("id", deviceId).single()
 
     if (deviceError || !device) {
+      console.error("Device not found:", deviceError)
       return { success: false, error: "デバイスが見つかりません" }
     }
 
@@ -45,7 +46,6 @@ export async function recordLocation(deviceId: string, latitude: number, longitu
 
     if (updateError) {
       console.error("Device update error:", updateError)
-      return { success: false, error: "デバイス情報の更新に失敗しました" }
     }
 
     // ジオフェンスチェック
@@ -55,7 +55,6 @@ export async function recordLocation(deviceId: string, latitude: number, longitu
     return {
       success: true,
       message: "位置情報を記録しました",
-      location: { latitude, longitude, accuracy, timestamp },
     }
   } catch (error) {
     console.error("Record location error:", error)
@@ -87,7 +86,7 @@ async function checkGeofence(userId: string, deviceId: string, latitude: number,
           deviceId,
           "geofence_exit",
           "high",
-          `${geofence.name}から離れました`,
+          `${geofence.name}から離れました（約${Math.round(distance)}m）`,
           latitude,
           longitude,
         )
@@ -99,7 +98,7 @@ async function checkGeofence(userId: string, deviceId: string, latitude: number,
           deviceId,
           "geofence_enter",
           "critical",
-          `${geofence.name}に入りました`,
+          `危険エリア「${geofence.name}」に入りました`,
           latitude,
           longitude,
         )
@@ -135,6 +134,21 @@ async function createAlert(
   longitude?: number,
 ) {
   try {
+    // 最近の同じアラートがないか確認（5分以内）
+    const fiveMinutesAgo = new Date(Date.now() - 5 * 60 * 1000).toISOString()
+
+    const { data: recentAlerts } = await supabase
+      .from("alerts")
+      .select("id")
+      .eq("device_id", deviceId)
+      .eq("alert_type", alertType)
+      .gte("created_at", fiveMinutesAgo)
+
+    if (recentAlerts && recentAlerts.length > 0) {
+      // 最近同じアラートがあるのでスキップ
+      return
+    }
+
     const { error } = await supabase.from("alerts").insert({
       user_id: userId,
       device_id: deviceId,
@@ -147,7 +161,7 @@ async function createAlert(
     })
 
     if (error) {
-      console.error("Create alert error:", error)
+      console.error("Alert creation error:", error)
     }
   } catch (error) {
     console.error("Create alert error:", error)
@@ -177,51 +191,5 @@ export async function getLocationHistory(deviceId: string, limit = 100) {
   } catch (error) {
     console.error("Get location history error:", error)
     return { success: false, error: "位置履歴の取得に失敗しました", data: [] }
-  }
-}
-
-// 自動位置追跡を開始（シミュレーション）
-export async function startAutoTracking(deviceId: string) {
-  try {
-    if (!deviceId) {
-      return { success: false, error: "デバイスIDが必要です" }
-    }
-
-    // デバイスをアクティブにする
-    const { error } = await supabase.from("devices").update({ is_active: true }).eq("id", deviceId)
-
-    if (error) {
-      console.error("Start tracking error:", error)
-      return { success: false, error: "追跡の開始に失敗しました" }
-    }
-
-    revalidatePath("/")
-    return { success: true, message: "自動追跡を開始しました" }
-  } catch (error) {
-    console.error("Start tracking error:", error)
-    return { success: false, error: "追跡の開始に失敗しました" }
-  }
-}
-
-// 自動位置追跡を停止
-export async function stopAutoTracking(deviceId: string) {
-  try {
-    if (!deviceId) {
-      return { success: false, error: "デバイスIDが必要です" }
-    }
-
-    // デバイスを非アクティブにする
-    const { error } = await supabase.from("devices").update({ is_active: false }).eq("id", deviceId)
-
-    if (error) {
-      console.error("Stop tracking error:", error)
-      return { success: false, error: "追跡の停止に失敗しました" }
-    }
-
-    revalidatePath("/")
-    return { success: true, message: "自動追跡を停止しました" }
-  } catch (error) {
-    console.error("Stop tracking error:", error)
-    return { success: false, error: "追跡の停止に失敗しました" }
   }
 }
