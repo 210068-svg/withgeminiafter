@@ -1,16 +1,18 @@
 "use client"
 
 import { useEffect, useState } from "react"
-import { Bell, X } from "lucide-react"
+import { X, AlertCircle, AlertTriangle, Info } from "lucide-react"
 import { getSupabaseClient } from "@/lib/supabase-client"
-import { useToast } from "@/hooks/use-toast"
+import { Button } from "@/components/ui/button"
 
 interface Alert {
   id: string
-  message: string
   alert_type: string
+  severity: string
+  message: string
+  location_lat: number | null
+  location_lng: number | null
   created_at: string
-  is_resolved: boolean
 }
 
 interface RealtimeAlertsProps {
@@ -19,14 +21,14 @@ interface RealtimeAlertsProps {
 
 export default function RealtimeAlerts({ userId }: RealtimeAlertsProps) {
   const [alerts, setAlerts] = useState<Alert[]>([])
-  const { toast } = useToast()
+  const [isVisible, setIsVisible] = useState(false)
 
   useEffect(() => {
-    const client = getSupabaseClient()
+    const supabase = getSupabaseClient()
 
-    // 未解決のアラートを取得
+    // 既存のアラートを取得
     const fetchAlerts = async () => {
-      const { data } = await client
+      const { data, error } = await supabase
         .from("alerts")
         .select("*")
         .eq("user_id", userId)
@@ -34,16 +36,22 @@ export default function RealtimeAlerts({ userId }: RealtimeAlertsProps) {
         .order("created_at", { ascending: false })
         .limit(5)
 
-      if (data) {
+      if (error) {
+        console.error("Error fetching alerts:", error)
+        return
+      }
+
+      if (data && data.length > 0) {
         setAlerts(data)
+        setIsVisible(true)
       }
     }
 
     fetchAlerts()
 
-    // Realtimeでアラートを購読
-    const channel = client
-      .channel("alerts")
+    // Realtimeサブスクリプション
+    const channel = supabase
+      .channel("alerts-channel")
       .on(
         "postgres_changes",
         {
@@ -54,35 +62,17 @@ export default function RealtimeAlerts({ userId }: RealtimeAlertsProps) {
         },
         (payload) => {
           const newAlert = payload.new as Alert
-          setAlerts((prev) => [newAlert, ...prev].slice(0, 5))
+          setAlerts((prev) => [newAlert, ...prev.slice(0, 4)])
+          setIsVisible(true)
 
-          // トースト通知
-          toast({
-            title: "新しいアラート",
-            description: newAlert.message,
-            variant: newAlert.alert_type === "exit" ? "destructive" : "default",
-          })
-
-          // ブラウザ通知
+          // ブラウザ通知を表示
           if ("Notification" in window && Notification.permission === "granted") {
-            new Notification("介護見守りアプリ", {
+            new Notification("新しいアラート", {
               body: newAlert.message,
               icon: "/icon.png",
+              tag: newAlert.id,
             })
           }
-        },
-      )
-      .on(
-        "postgres_changes",
-        {
-          event: "UPDATE",
-          schema: "public",
-          table: "alerts",
-          filter: `user_id=eq.${userId}`,
-        },
-        (payload) => {
-          const updatedAlert = payload.new as Alert
-          setAlerts((prev) => prev.map((a) => (a.id === updatedAlert.id ? updatedAlert : a)))
         },
       )
       .subscribe()
@@ -93,44 +83,69 @@ export default function RealtimeAlerts({ userId }: RealtimeAlertsProps) {
     }
 
     return () => {
-      channel.unsubscribe()
+      supabase.removeChannel(channel)
     }
-  }, [userId, toast])
+  }, [userId])
 
-  const resolveAlert = async (alertId: string) => {
-    const client = getSupabaseClient()
-    await client.from("alerts").update({ is_resolved: true }).eq("id", alertId)
-
-    setAlerts((prev) => prev.filter((a) => a.id !== alertId))
+  const dismissAlert = (alertId: string) => {
+    setAlerts((prev) => prev.filter((alert) => alert.id !== alertId))
+    if (alerts.length <= 1) {
+      setIsVisible(false)
+    }
   }
 
-  if (alerts.length === 0) {
+  const getSeverityIcon = (severity: string) => {
+    switch (severity) {
+      case "critical":
+        return <AlertCircle className="h-5 w-5 text-red-600" />
+      case "high":
+        return <AlertTriangle className="h-5 w-5 text-orange-600" />
+      case "medium":
+        return <AlertTriangle className="h-5 w-5 text-yellow-600" />
+      default:
+        return <Info className="h-5 w-5 text-blue-600" />
+    }
+  }
+
+  const getSeverityColor = (severity: string) => {
+    switch (severity) {
+      case "critical":
+        return "bg-red-50 border-red-200"
+      case "high":
+        return "bg-orange-50 border-orange-200"
+      case "medium":
+        return "bg-yellow-50 border-yellow-200"
+      default:
+        return "bg-blue-50 border-blue-200"
+    }
+  }
+
+  if (!isVisible || alerts.length === 0) {
     return null
   }
 
   return (
-    <div className="fixed top-4 right-4 z-50 space-y-2 max-w-sm">
+    <div className="fixed top-4 right-4 z-50 space-y-2 max-w-md">
       {alerts.map((alert) => (
         <div
           key={alert.id}
-          className={`p-4 rounded-lg shadow-lg ${
-            alert.alert_type === "exit" ? "bg-red-50 border-red-200" : "bg-blue-50 border-blue-200"
-          } border flex items-start justify-between animate-in slide-in-from-right`}
+          className={`${getSeverityColor(alert.severity)} border rounded-lg p-4 shadow-lg animate-in slide-in-from-right`}
         >
-          <div className="flex items-start space-x-3">
-            <Bell className={`h-5 w-5 mt-0.5 ${alert.alert_type === "exit" ? "text-red-600" : "text-blue-600"}`} />
-            <div>
-              <p className={`font-medium ${alert.alert_type === "exit" ? "text-red-900" : "text-blue-900"}`}>
-                {alert.message}
-              </p>
-              <p className={`text-xs mt-1 ${alert.alert_type === "exit" ? "text-red-600" : "text-blue-600"}`}>
-                {new Date(alert.created_at).toLocaleTimeString("ja-JP")}
-              </p>
+          <div className="flex items-start gap-3">
+            <div className="flex-shrink-0 mt-0.5">{getSeverityIcon(alert.severity)}</div>
+            <div className="flex-1 min-w-0">
+              <div className="flex items-start justify-between gap-2">
+                <div className="flex-1">
+                  <p className="font-semibold text-sm capitalize">{alert.alert_type.replace("_", " ")}</p>
+                  <p className="text-sm text-gray-700 mt-1">{alert.message}</p>
+                  <p className="text-xs text-gray-500 mt-2">{new Date(alert.created_at).toLocaleTimeString("ja-JP")}</p>
+                </div>
+                <Button variant="ghost" size="sm" className="h-6 w-6 p-0" onClick={() => dismissAlert(alert.id)}>
+                  <X className="h-4 w-4" />
+                </Button>
+              </div>
             </div>
           </div>
-          <button onClick={() => resolveAlert(alert.id)} className="ml-2 text-gray-400 hover:text-gray-600">
-            <X className="h-4 w-4" />
-          </button>
         </div>
       ))}
     </div>

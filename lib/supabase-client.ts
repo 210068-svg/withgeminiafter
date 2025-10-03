@@ -1,33 +1,30 @@
 "use client"
 
 import { createClient } from "@supabase/supabase-js"
+import type { Database } from "./supabase"
 
-let supabaseClient: ReturnType<typeof createClient> | null = null
+const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!
+const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
+
+if (!supabaseUrl || !supabaseAnonKey) {
+  throw new Error("Missing Supabase environment variables")
+}
+
+// クライアントサイド用のSupabaseクライアント（シングルトン）
+let supabaseClient: ReturnType<typeof createClient<Database>> | null = null
 
 export function getSupabaseClient() {
-  if (supabaseClient) {
-    return supabaseClient
-  }
-
-  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!
-  const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
-
-  if (!supabaseUrl || !supabaseAnonKey) {
-    throw new Error("Missing Supabase environment variables")
-  }
-
-  supabaseClient = createClient(supabaseUrl, supabaseAnonKey, {
-    realtime: {
-      params: {
-        eventsPerSecond: 10,
+  if (!supabaseClient) {
+    supabaseClient = createClient<Database>(supabaseUrl, supabaseAnonKey, {
+      auth: {
+        persistSession: false,
       },
-    },
-  })
-
+    })
+  }
   return supabaseClient
 }
 
-// リアルタイムサブスクリプション用のヘルパー
+// リアルタイムサブスクリプション用のヘルパー関数
 export function subscribeToDeviceUpdates(userId: string, callback: (payload: any) => void) {
   const client = getSupabaseClient()
 
@@ -87,3 +84,6 @@ export function subscribeToAlerts(userId: string, callback: (payload: any) => vo
 
   return channel
 }
+
+// デフォルトエクスポート（後方互換性のため）
+export const supabase = getSupabaseClient()

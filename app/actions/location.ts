@@ -3,72 +3,44 @@
 import { supabase } from "@/lib/supabase"
 import { revalidatePath } from "next/cache"
 
-interface LocationData {
-  deviceId: string
-  latitude: number
-  longitude: number
-  accuracy?: number
-  altitude?: number
-  speed?: number
-  heading?: number
-}
-
 // 位置情報を記録
-export async function recordLocation(data: LocationData) {
+export async function recordLocation(deviceId: string, latitude: number, longitude: number, accuracy = 10) {
   try {
-    const { deviceId, latitude, longitude, accuracy, altitude, speed, heading } = data
-
     if (!deviceId || !latitude || !longitude) {
-      return {
-        success: false,
-        error: "必須パラメータが不足しています",
-      }
+      return { success: false, error: "必須パラメータが不足しています" }
     }
 
     // デバイスが存在するか確認
-    const { data: device, error: deviceError } = await supabase
-      .from("devices")
-      .select("id, user_id")
-      .eq("id", deviceId)
-      .single()
+    const { data: device, error: deviceError } = await supabase.from("devices").select("*").eq("id", deviceId).single()
 
     if (deviceError || !device) {
-      return {
-        success: false,
-        error: "デバイスが見つかりません",
-      }
+      console.error("Device not found:", deviceError)
+      return { success: false, error: "デバイスが見つかりません" }
     }
 
-    // 位置履歴を記録
-    const { data: locationHistory, error: historyError } = await supabase
-      .from("location_history")
-      .insert({
-        device_id: deviceId,
-        latitude,
-        longitude,
-        accuracy: accuracy || null,
-        altitude: altitude || null,
-        speed: speed || null,
-        heading: heading || null,
-      })
-      .select()
-      .single()
+    const timestamp = new Date().toISOString()
+
+    // 位置履歴に記録
+    const { error: historyError } = await supabase.from("location_history").insert({
+      device_id: deviceId,
+      latitude,
+      longitude,
+      accuracy,
+      timestamp,
+    })
 
     if (historyError) {
-      console.error("Location history insert error:", historyError)
-      return {
-        success: false,
-        error: "位置情報の記録に失敗しました",
-      }
+      console.error("Location history error:", historyError)
+      return { success: false, error: "位置履歴の記録に失敗しました" }
     }
 
-    // デバイスの最終位置を更新
+    // デバイスの最新位置を更新
     const { error: updateError } = await supabase
       .from("devices")
       .update({
-        last_latitude: latitude,
-        last_longitude: longitude,
-        last_seen: new Date().toISOString(),
+        last_location_lat: latitude,
+        last_location_lng: longitude,
+        last_location_time: timestamp,
       })
       .eq("id", deviceId)
 
@@ -77,24 +49,21 @@ export async function recordLocation(data: LocationData) {
     }
 
     // ジオフェンスチェック
-    await checkGeofenceViolation(device.user_id, deviceId, latitude, longitude)
+    await checkGeofence(device.user_id, deviceId, latitude, longitude)
 
     revalidatePath("/")
     return {
       success: true,
-      data: locationHistory,
+      message: "位置情報を記録しました",
     }
   } catch (error) {
     console.error("Record location error:", error)
-    return {
-      success: false,
-      error: "位置情報の記録中にエラーが発生しました",
-    }
+    return { success: false, error: "位置情報の記録に失敗しました" }
   }
 }
 
-// ジオフェンス違反をチェック
-async function checkGeofenceViolation(userId: string, deviceId: string, latitude: number, longitude: number) {
+// ジオフェンスをチェック
+async function checkGeofence(userId: string, deviceId: string, latitude: number, longitude: number) {
   try {
     // アクティブなジオフェンスを取得
     const { data: geofences, error: geofenceError } = await supabase
@@ -108,18 +77,31 @@ async function checkGeofenceViolation(userId: string, deviceId: string, latitude
     }
 
     for (const geofence of geofences) {
-      const distance = calculateDistance(latitude, longitude, geofence.center_latitude, geofence.center_longitude)
+      const distance = calculateDistance(latitude, longitude, geofence.center_lat, geofence.center_lng)
 
-      const isInside = distance <= geofence.radius
-
-      // エリア外にいる場合、アラートを作成
-      if (!isInside && geofence.alert_on_exit) {
-        await createAlert(userId, deviceId, geofence.id, "exit", latitude, longitude)
+      // 安全エリアの場合: エリア外にいる場合にアラート
+      if (geofence.area_type === "safe" && distance > geofence.radius) {
+        await createAlert(
+          userId,
+          deviceId,
+          "geofence_exit",
+          "high",
+          `${geofence.name}から離れました（約${Math.round(distance)}m）`,
+          latitude,
+          longitude,
+        )
       }
-
-      // エリア内に入った場合、アラートを作成
-      if (isInside && geofence.alert_on_enter) {
-        await createAlert(userId, deviceId, geofence.id, "enter", latitude, longitude)
+      // 危険エリアの場合: エリア内に入った場合にアラート
+      else if (geofence.area_type === "danger" && distance <= geofence.radius) {
+        await createAlert(
+          userId,
+          deviceId,
+          "geofence_enter",
+          "critical",
+          `危険エリア「${geofence.name}」に入りました`,
+          latitude,
+          longitude,
+        )
       }
     }
   } catch (error) {
@@ -145,10 +127,11 @@ function calculateDistance(lat1: number, lon1: number, lat2: number, lon2: numbe
 async function createAlert(
   userId: string,
   deviceId: string,
-  geofenceId: string,
-  alertType: "enter" | "exit",
-  latitude: number,
-  longitude: number,
+  alertType: string,
+  severity: string,
+  message: string,
+  latitude?: number,
+  longitude?: number,
 ) {
   try {
     // 最近の同じアラートがないか確認（5分以内）
@@ -158,7 +141,6 @@ async function createAlert(
       .from("alerts")
       .select("id")
       .eq("device_id", deviceId)
-      .eq("geofence_id", geofenceId)
       .eq("alert_type", alertType)
       .gte("created_at", fiveMinutesAgo)
 
@@ -167,16 +149,14 @@ async function createAlert(
       return
     }
 
-    const message = alertType === "exit" ? "利用者が設定エリアから出ました" : "利用者が設定エリアに入りました"
-
     const { error } = await supabase.from("alerts").insert({
       user_id: userId,
       device_id: deviceId,
-      geofence_id: geofenceId,
       alert_type: alertType,
+      severity,
       message,
-      latitude,
-      longitude,
+      location_lat: latitude || null,
+      location_lng: longitude || null,
       is_resolved: false,
     })
 
@@ -188,45 +168,28 @@ async function createAlert(
   }
 }
 
-// デバイスの最新位置を取得
-export async function getLatestLocation(deviceId: string) {
-  try {
-    const { data, error } = await supabase
-      .from("location_history")
-      .select("*")
-      .eq("device_id", deviceId)
-      .order("created_at", { ascending: false })
-      .limit(1)
-      .single()
-
-    if (error) {
-      return { success: false, error: "位置情報の取得に失敗しました", data: null }
-    }
-
-    return { success: true, data }
-  } catch (error) {
-    console.error("Get latest location error:", error)
-    return { success: false, error: "位置情報の取得中にエラーが発生しました", data: null }
-  }
-}
-
 // 位置履歴を取得
 export async function getLocationHistory(deviceId: string, limit = 100) {
   try {
+    if (!deviceId) {
+      return { success: false, error: "デバイスIDが必要です", data: [] }
+    }
+
     const { data, error } = await supabase
       .from("location_history")
       .select("*")
       .eq("device_id", deviceId)
-      .order("created_at", { ascending: false })
+      .order("timestamp", { ascending: false })
       .limit(limit)
 
     if (error) {
+      console.error("Get location history error:", error)
       return { success: false, error: "位置履歴の取得に失敗しました", data: [] }
     }
 
     return { success: true, data: data || [] }
   } catch (error) {
     console.error("Get location history error:", error)
-    return { success: false, error: "位置履歴の取得中にエラーが発生しました", data: [] }
+    return { success: false, error: "位置履歴の取得に失敗しました", data: [] }
   }
 }
