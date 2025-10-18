@@ -1,318 +1,257 @@
 "use client"
 
-import { useEffect, useState, useCallback } from "react"
-import { MapPin, Play, Square, Loader2 } from "lucide-react"
+import { useEffect, useState, useRef } from "react"
 import { Button } from "@/components/ui/button"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
-import { getSupabaseClient } from "@/lib/supabase-client"
-import { recordLocation } from "./actions/location"
+import { MapPin, Layers } from "lucide-react"
+import Script from "next/script"
 
 interface MapComponentProps {
-  userId: string
-  deviceId?: string
+  initialLatitude?: number
+  initialLongitude?: number
+  initialZoom?: number
   showGeofence?: boolean
 }
 
-export default function MapComponent({ userId, deviceId, showGeofence = true }: MapComponentProps) {
-  const [isTracking, setIsTracking] = useState(false)
-  const [currentLocation, setCurrentLocation] = useState<{ lat: number; lng: number } | null>(null)
-  const [devices, setDevices] = useState<any[]>([])
-  const [geofences, setGeofences] = useState<any[]>([])
-  const [error, setError] = useState<string | null>(null)
-  const [loading, setLoading] = useState(true)
+export default function MapComponent({
+  initialLatitude = 35.6895, // 東京都の緯度をデフォルト値として設定
+  initialLongitude = 139.6917, // 東京都の経度をデフォルト値として設定
+  initialZoom = 15,
+  showGeofence = true,
+}: MapComponentProps) {
+  const mapRef = useRef<HTMLDivElement>(null)
+  const [leafletLoaded, setLeafletLoaded] = useState(false)
+  const [map, setMap] = useState<any>(null)
+  const [currentPosition, setCurrentPosition] = useState<{ lat: number; lng: number } | null>(null)
+  const [positionMarker, setPositionMarker] = useState<any>(null)
+  const [mapLayer, setMapLayer] = useState<"osm" | "satellite">("osm")
+  const [geofenceVisible, setGeofenceVisible] = useState(showGeofence)
+  const [geofenceCircle, setGeofenceCircle] = useState<any>(null)
 
-  // デバイスとジオフェンスを取得
-  useEffect(() => {
-    const fetchData = async () => {
-      const supabase = getSupabaseClient()
-
-      // デバイスを取得
-      const { data: devicesData, error: devicesError } = await supabase
-        .from("devices")
-        .select("*")
-        .eq("user_id", userId)
-        .eq("is_active", true)
-
-      if (devicesError) {
-        console.error("Error fetching devices:", devicesError)
-      } else {
-        setDevices(devicesData || [])
-        if (devicesData && devicesData.length > 0 && devicesData[0].last_location_lat) {
-          setCurrentLocation({
-            lat: devicesData[0].last_location_lat,
-            lng: devicesData[0].last_location_lng,
-          })
-        }
-      }
-
-      // ジオフェンスを取得
-      if (showGeofence) {
-        const { data: geofencesData, error: geofencesError } = await supabase
-          .from("geofences")
-          .select("*")
-          .eq("user_id", userId)
-          .eq("is_active", true)
-
-        if (geofencesError) {
-          console.error("Error fetching geofences:", geofencesError)
-        } else {
-          setGeofences(geofencesData || [])
-        }
-      }
-
-      setLoading(false)
-    }
-
-    fetchData()
-  }, [userId, showGeofence])
-
-  // Realtimeサブスクリプション
-  useEffect(() => {
-    const supabase = getSupabaseClient()
-
-    const channel = supabase
-      .channel("devices-channel")
-      .on(
-        "postgres_changes",
-        {
-          event: "UPDATE",
-          schema: "public",
-          table: "devices",
-          filter: `user_id=eq.${userId}`,
-        },
-        (payload) => {
-          const updatedDevice = payload.new as any
-          if (updatedDevice.last_location_lat && updatedDevice.last_location_lng) {
-            setCurrentLocation({
-              lat: updatedDevice.last_location_lat,
-              lng: updatedDevice.last_location_lng,
-            })
-            setDevices((prev) =>
-              prev.map((device) => (device.id === updatedDevice.id ? { ...device, ...updatedDevice } : device)),
-            )
-          }
-        },
-      )
-      .subscribe()
-
-    return () => {
-      supabase.removeChannel(channel)
-    }
-  }, [userId])
-
-  // 位置情報の追跡
-  const startTracking = useCallback(() => {
-    if (!devices || devices.length === 0) {
-      setError("デバイスが登録されていません")
-      return
-    }
-
-    const targetDeviceId = deviceId || devices[0].id
-
-    setIsTracking(true)
-    setError(null)
-
-    // シミュレーション: 定期的に位置情報を更新
-    const interval = setInterval(() => {
-      // 東京駅付近をランダムに移動
-      const baseLat = 35.6812
-      const baseLng = 139.7671
-      const randomLat = baseLat + (Math.random() - 0.5) * 0.01
-      const randomLng = baseLng + (Math.random() - 0.5) * 0.01
-
-      recordLocation(targetDeviceId, randomLat, randomLng, 10).then((result) => {
-        if (!result.success) {
-          console.error("Location recording error:", result.error)
-          setError(result.error || "位置情報の記録に失敗しました")
-          stopTracking()
-        }
-      })
-    }, 10000) // 10秒ごと
-
-    // クリーンアップ関数を返す
-    return () => {
-      clearInterval(interval)
-      setIsTracking(false)
-    }
-  }, [devices, deviceId])
-
-  const stopTracking = useCallback(() => {
-    setIsTracking(false)
-  }, [])
-
-  // 追跡の開始/停止
-  useEffect(() => {
-    let cleanup: (() => void) | undefined
-
-    if (isTracking) {
-      cleanup = startTracking()
-    }
-
-    return () => {
-      if (cleanup) {
-        cleanup()
-      }
-    }
-  }, [isTracking, startTracking])
-
-  if (loading) {
-    return (
-      <Card>
-        <CardHeader>
-          <CardTitle>位置情報マップ</CardTitle>
-          <CardDescription>リアルタイムで位置を追跡</CardDescription>
-        </CardHeader>
-        <CardContent>
-          <div className="flex items-center justify-center h-96">
-            <Loader2 className="h-8 w-8 animate-spin text-emerald-600" />
-          </div>
-        </CardContent>
-      </Card>
-    )
+  // Leaflet.jsのロード完了時の処理
+  const handleLeafletLoaded = () => {
+    setLeafletLoaded(true)
   }
 
+  // 地図の初期化
+  useEffect(() => {
+    if (!leafletLoaded || !mapRef.current || typeof window === "undefined") return
+
+    // Leafletが利用可能かチェック
+    if (typeof (window as any).L === "undefined") return
+
+    const L = (window as any).L
+
+    // 地図の初期化
+    const newMap = L.map(mapRef.current).setView([initialLatitude, initialLongitude], initialZoom)
+
+    // タイルレイヤーの設定
+    const osmLayer = L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+      attribution: '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+    })
+
+    const satelliteLayer = L.tileLayer(
+      "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
+      {
+        attribution:
+          "Tiles &copy; Esri &mdash; Source: Esri, i-cubed, USDA, USGS, AEX, GeoEye, Getmapping, Aerogrid, IGN, IGP, UPR-EGP, and the GIS User Community",
+      },
+    )
+
+    // 初期レイヤーを追加
+    if (mapLayer === "osm") {
+      osmLayer.addTo(newMap)
+    } else {
+      satelliteLayer.addTo(newMap)
+    }
+
+    setMap(newMap)
+
+    // 現在位置の取得
+    if (navigator.geolocation) {
+      navigator.geolocation.getCurrentPosition(
+        (position) => {
+          const pos = {
+            lat: position.coords.latitude,
+            lng: position.coords.longitude,
+          }
+          setCurrentPosition(pos)
+          newMap.setView([pos.lat, pos.lng], initialZoom)
+        },
+        () => {
+          console.log("位置情報の取得に失敗しました")
+          // デフォルト位置を設定
+          setCurrentPosition({ lat: initialLatitude, lng: initialLongitude })
+        },
+      )
+    } else {
+      // Geolocationが利用できない場合はデフォルト位置を設定
+      setCurrentPosition({ lat: initialLatitude, lng: initialLongitude })
+    }
+
+    return () => {
+      if (newMap) {
+        newMap.remove()
+      }
+    }
+  }, [leafletLoaded, initialLatitude, initialLongitude, initialZoom])
+
+  // 現在位置マーカーの設定
+  useEffect(() => {
+    if (!map || !currentPosition || typeof window === "undefined") return
+
+    const L = (window as any).L
+
+    if (positionMarker) {
+      positionMarker.setLatLng([currentPosition.lat, currentPosition.lng])
+    } else {
+      // カスタムアイコンの作成
+      const customIcon = L.divIcon({
+        className: "custom-marker",
+        html: `<div style="
+          width: 20px; 
+          height: 20px; 
+          background-color: #10b981; 
+          border: 3px solid white; 
+          border-radius: 50%; 
+          box-shadow: 0 2px 4px rgba(0,0,0,0.3);
+        "></div>`,
+        iconSize: [20, 20],
+        iconAnchor: [10, 10],
+      })
+
+      const marker = L.marker([currentPosition.lat, currentPosition.lng], { icon: customIcon })
+        .addTo(map)
+        .bindPopup("現在位置: 利用者")
+
+      setPositionMarker(marker)
+    }
+
+    // ジオフェンスの表示
+    if (geofenceVisible) {
+      if (geofenceCircle) {
+        geofenceCircle.setLatLng([currentPosition.lat, currentPosition.lng])
+      } else {
+        const circle = L.circle([currentPosition.lat, currentPosition.lng], {
+          color: "#10b981",
+          fillColor: "#10b981",
+          fillOpacity: 0.2,
+          radius: 200, // 半径200m
+        }).addTo(map)
+
+        setGeofenceCircle(circle)
+      }
+    } else if (geofenceCircle) {
+      map.removeLayer(geofenceCircle)
+      setGeofenceCircle(null)
+    }
+  }, [map, currentPosition, positionMarker, geofenceVisible, geofenceCircle])
+
+  // 地図レイヤーの切り替え
+  const toggleMapLayer = () => {
+    if (!map || typeof window === "undefined") return
+
+    const L = (window as any).L
+
+    // 現在のレイヤーを削除
+    map.eachLayer((layer: any) => {
+      if (layer instanceof L.TileLayer) {
+        map.removeLayer(layer)
+      }
+    })
+
+    const newLayer = mapLayer === "osm" ? "satellite" : "osm"
+    setMapLayer(newLayer)
+
+    // 新しいレイヤーを追加
+    if (newLayer === "osm") {
+      L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+        attribution: '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+      }).addTo(map)
+    } else {
+      L.tileLayer("https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}", {
+        attribution:
+          "Tiles &copy; Esri &mdash; Source: Esri, i-cubed, USDA, USGS, AEX, GeoEye, Getmapping, Aerogrid, IGN, IGP, UPR-EGP, and the GIS User Community",
+      }).addTo(map)
+    }
+  }
+
+  // ジオフェンス表示の切り替え
+  const toggleGeofenceDisplay = () => {
+    setGeofenceVisible(!geofenceVisible)
+  }
+
+  // 位置情報の定期更新
+  useEffect(() => {
+    if (!map) return
+
+    const watchId = navigator.geolocation?.watchPosition(
+      (position) => {
+        const pos = {
+          lat: position.coords.latitude,
+          lng: position.coords.longitude,
+        }
+        setCurrentPosition(pos)
+      },
+      () => {
+        console.log("位置情報の監視に失敗しました")
+      },
+      {
+        enableHighAccuracy: true,
+        timeout: 5000,
+        maximumAge: 0,
+      },
+    )
+
+    return () => {
+      if (watchId) {
+        navigator.geolocation?.clearWatch(watchId)
+      }
+    }
+  }, [map])
+
   return (
-    <Card>
-      <CardHeader>
-        <div className="flex items-center justify-between">
-          <div>
-            <CardTitle>位置情報マップ</CardTitle>
-            <CardDescription>リアルタイムで位置を追跡</CardDescription>
-          </div>
-          <div className="flex gap-2">
-            {!isTracking ? (
-              <Button onClick={() => setIsTracking(true)} size="sm" className="gap-2">
-                <Play className="h-4 w-4" />
-                追跡開始
-              </Button>
-            ) : (
-              <Button onClick={stopTracking} variant="destructive" size="sm" className="gap-2">
-                <Square className="h-4 w-4" />
-                追跡停止
-              </Button>
-            )}
-          </div>
-        </div>
-      </CardHeader>
-      <CardContent>
-        {error && (
-          <div className="mb-4 p-3 bg-red-50 border border-red-200 rounded-lg text-sm text-red-800">{error}</div>
-        )}
+    <>
+      <Script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" onLoad={handleLeafletLoaded} />
+      <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
 
-        <div className="relative h-96 bg-gray-100 rounded-lg overflow-hidden">
-          {/* 地図のプレースホルダー */}
-          <div className="absolute inset-0 flex items-center justify-center">
-            <div className="text-center">
-              <MapPin className="h-12 w-12 text-gray-400 mx-auto mb-2" />
-              <p className="text-gray-500 text-sm">地図表示エリア</p>
-              {currentLocation && (
-                <p className="text-xs text-gray-400 mt-2">
-                  緯度: {currentLocation.lat.toFixed(6)}, 経度: {currentLocation.lng.toFixed(6)}
+      <div className="bg-gray-200 rounded-lg overflow-hidden h-[400px] relative">
+        <div ref={mapRef} className="absolute inset-0 z-0"></div>
+
+        <div className="absolute top-4 right-4 bg-white p-2 rounded-md shadow-md z-10">
+          <Button variant="outline" size="sm" className="mr-2 bg-transparent" onClick={toggleGeofenceDisplay}>
+            <MapPin className="h-4 w-4 mr-1" />
+            {geofenceVisible ? "ジオフェンス非表示" : "ジオフェンス表示"}
+          </Button>
+          <Button variant="outline" size="sm" onClick={toggleMapLayer}>
+            <Layers className="h-4 w-4 mr-1" />
+            {mapLayer === "osm" ? "衛星表示" : "地図表示"}
+          </Button>
+        </div>
+
+        {currentPosition && (
+          <div className="absolute bottom-4 left-4 bg-white p-3 rounded-md shadow-md z-10">
+            <div className="flex items-center">
+              <div className="w-3 h-3 bg-emerald-500 rounded-full mr-2"></div>
+              <div>
+                <p className="font-medium">利用者</p>
+                <p className="text-xs text-gray-500">
+                  緯度: {currentPosition.lat.toFixed(6)}, 経度: {currentPosition.lng.toFixed(6)}
                 </p>
-              )}
-            </div>
-          </div>
-
-          {/* デバイスマーカー */}
-          {devices.map((device) => (
-            <div
-              key={device.id}
-              className="absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2"
-              style={{
-                animation: isTracking ? "pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite" : "none",
-              }}
-            >
-              <div className="relative">
-                <div className="absolute -inset-2 bg-emerald-400 rounded-full opacity-75 animate-ping"></div>
-                <MapPin className="relative h-8 w-8 text-emerald-600 fill-emerald-200" />
+                <p className="text-xs text-gray-400 mt-1">地図データ: OpenStreetMap</p>
               </div>
             </div>
-          ))}
-
-          {/* ジオフェンス円 */}
-          {showGeofence &&
-            geofences.map((geofence, index) => (
-              <div
-                key={geofence.id}
-                className="absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2"
-                style={{
-                  width: `${Math.min(geofence.radius / 5, 200)}px`,
-                  height: `${Math.min(geofence.radius / 5, 200)}px`,
-                }}
-              >
-                <div
-                  className={`w-full h-full rounded-full border-2 ${
-                    geofence.area_type === "safe"
-                      ? "border-emerald-400 bg-emerald-100/30"
-                      : "border-red-400 bg-red-100/30"
-                  }`}
-                ></div>
-                <div className="absolute top-0 left-1/2 transform -translate-x-1/2 -translate-y-full mb-2">
-                  <span className="text-xs font-medium bg-white px-2 py-1 rounded shadow">{geofence.name}</span>
-                </div>
-              </div>
-            ))}
-
-          {/* 追跡ステータス */}
-          {isTracking && (
-            <div className="absolute top-4 left-4 bg-emerald-600 text-white px-3 py-1 rounded-full text-xs font-medium flex items-center gap-2">
-              <div className="w-2 h-2 bg-white rounded-full animate-pulse"></div>
-              追跡中
-            </div>
-          )}
-        </div>
-
-        {/* デバイス情報 */}
-        {devices.length > 0 && (
-          <div className="mt-4 space-y-2">
-            {devices.map((device) => (
-              <div key={device.id} className="p-3 bg-gray-50 rounded-lg">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <p className="font-medium text-sm">{device.device_name}</p>
-                    <p className="text-xs text-gray-500">
-                      最終更新:{" "}
-                      {device.last_location_time
-                        ? new Date(device.last_location_time).toLocaleString("ja-JP")
-                        : "未取得"}
-                    </p>
-                  </div>
-                  <div className="text-right">
-                    <div className="flex items-center gap-2">
-                      <span className="text-xs text-gray-500">バッテリー</span>
-                      <span className="text-sm font-medium">{device.battery_level || 0}%</span>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            ))}
           </div>
         )}
 
-        {/* ジオフェンス情報 */}
-        {showGeofence && geofences.length > 0 && (
-          <div className="mt-4">
-            <h3 className="text-sm font-medium mb-2">設定エリア</h3>
-            <div className="space-y-2">
-              {geofences.map((geofence) => (
-                <div key={geofence.id} className="p-2 bg-gray-50 rounded text-xs">
-                  <div className="flex items-center justify-between">
-                    <span className="font-medium">{geofence.name}</span>
-                    <span
-                      className={`px-2 py-0.5 rounded-full ${
-                        geofence.area_type === "safe" ? "bg-emerald-100 text-emerald-700" : "bg-red-100 text-red-700"
-                      }`}
-                    >
-                      {geofence.area_type === "safe" ? "安全エリア" : "危険エリア"}
-                    </span>
-                  </div>
-                  <p className="text-gray-500 mt-1">半径: {geofence.radius}m</p>
-                </div>
-              ))}
+        {!leafletLoaded && (
+          <div className="absolute inset-0 flex items-center justify-center bg-gray-100 z-20">
+            <div className="text-center">
+              <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-emerald-600 mx-auto mb-2"></div>
+              <p className="text-sm text-gray-600">地図を読み込み中...</p>
             </div>
           </div>
         )}
-      </CardContent>
-    </Card>
+      </div>
+    </>
   )
 }

@@ -1,7 +1,8 @@
 "use server"
 
 import { revalidatePath } from "next/cache"
-import { supabase } from "@/lib/supabase"
+
+// デバイス管理のServer Actions
 
 // デバイスの登録
 export async function registerDevice(formData: FormData) {
@@ -27,74 +28,25 @@ export async function registerDevice(formData: FormData) {
       }
     }
 
-    // ユーザーが存在しない場合は作成
-    const { data: existingUser } = await supabase.from("users").select("id").eq("id", deviceData.userId).single()
+    // デバイスIDを生成（実際のアプリではUUIDなどを使用）
+    const deviceId = `device_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`
 
-    if (!existingUser) {
-      const { error: userError } = await supabase.from("users").insert({ id: deviceData.userId })
+    // 実際のアプリでは、ここでデータベースに保存
+    console.log("Registering device:", { ...deviceData, deviceId })
 
-      if (userError) {
-        console.error("User creation error:", userError)
-        return { success: false, error: "ユーザーの作成に失敗しました" }
-      }
-    }
-
-    // ペアリングコード生成
-    const pairingCode = Math.random().toString(36).substr(2, 8).toUpperCase()
-
-    // Supabaseにデータを挿入
-    const { data, error } = await supabase
-      .from("devices")
-      .insert({
-        user_id: deviceData.userId,
-        device_name: deviceData.deviceName,
-        device_type: deviceData.deviceType,
-        phone_number: deviceData.phoneNumber || null,
-        emergency_contact: deviceData.emergencyContact || null,
-        notes: deviceData.notes || null,
-        pairing_code: pairingCode,
-        is_active: true,
-      })
-      .select()
-      .single()
-
-    if (error) {
-      console.error("Supabase error:", error)
-      return { success: false, error: "デバイス登録に失敗しました" }
-    }
+    // 一時的な遅延をシミュレート
+    await new Promise((resolve) => setTimeout(resolve, 1500))
 
     revalidatePath("/devices")
-    revalidatePath("/setup")
     return {
       success: true,
       message: "デバイスを登録しました",
-      deviceId: data.id,
-      pairingCode: pairingCode,
+      deviceId,
+      pairingCode: Math.random().toString(36).substr(2, 8).toUpperCase(),
     }
   } catch (error) {
     console.error("Device registration error:", error)
     return { success: false, error: "デバイス登録に失敗しました" }
-  }
-}
-
-// デバイス一覧の取得
-export async function getDevices(userId: string) {
-  try {
-    const { data, error } = await supabase
-      .from("devices")
-      .select("*")
-      .eq("user_id", userId)
-      .order("created_at", { ascending: false })
-
-    if (error) {
-      console.error("Supabase error:", error)
-      return { success: false, error: "デバイス一覧の取得に失敗しました", data: [] }
-    }
-
-    return { success: true, data: data || [] }
-  } catch (error) {
-    console.error("Get devices error:", error)
-    return { success: false, error: "デバイス一覧の取得に失敗しました", data: [] }
   }
 }
 
@@ -118,21 +70,10 @@ export async function updateDevice(formData: FormData) {
       return { success: false, error: "デバイス名は必須項目です" }
     }
 
-    const { error } = await supabase
-      .from("devices")
-      .update({
-        device_name: deviceData.deviceName,
-        phone_number: deviceData.phoneNumber || null,
-        emergency_contact: deviceData.emergencyContact || null,
-        notes: deviceData.notes || null,
-        is_active: deviceData.isActive,
-      })
-      .eq("id", deviceId)
+    // 実際のアプリでは、ここでデータベースを更新
+    console.log("Updating device:", deviceId, deviceData)
 
-    if (error) {
-      console.error("Supabase error:", error)
-      return { success: false, error: "更新に失敗しました" }
-    }
+    await new Promise((resolve) => setTimeout(resolve, 1000))
 
     revalidatePath("/devices")
     return { success: true, message: "デバイス情報を更新しました" }
@@ -149,12 +90,10 @@ export async function deleteDevice(deviceId: string) {
       return { success: false, error: "デバイスIDが見つかりません" }
     }
 
-    const { error } = await supabase.from("devices").delete().eq("id", deviceId)
+    // 実際のアプリでは、ここでデータベースから削除
+    console.log("Deleting device:", deviceId)
 
-    if (error) {
-      console.error("Supabase error:", error)
-      return { success: false, error: "削除に失敗しました" }
-    }
+    await new Promise((resolve) => setTimeout(resolve, 1000))
 
     revalidatePath("/devices")
     return { success: true, message: "デバイスを削除しました" }
@@ -171,12 +110,10 @@ export async function startLocationTracking(deviceId: string) {
       return { success: false, error: "デバイスIDが見つかりません" }
     }
 
-    const { error } = await supabase.from("devices").update({ is_active: true }).eq("id", deviceId)
+    // 実際のアプリでは、ここでデバイスに位置情報取得開始の指示を送信
+    console.log("Starting location tracking for device:", deviceId)
 
-    if (error) {
-      console.error("Supabase error:", error)
-      return { success: false, error: "位置情報取得の開始に失敗しました" }
-    }
+    await new Promise((resolve) => setTimeout(resolve, 1000))
 
     revalidatePath("/devices")
     return { success: true, message: "位置情報の取得を開始しました" }
@@ -193,12 +130,10 @@ export async function stopLocationTracking(deviceId: string) {
       return { success: false, error: "デバイスIDが見つかりません" }
     }
 
-    const { error } = await supabase.from("devices").update({ is_active: false }).eq("id", deviceId)
+    // 実際のアプリでは、ここでデバイスに位置情報取得停止の指示を送信
+    console.log("Stopping location tracking for device:", deviceId)
 
-    if (error) {
-      console.error("Supabase error:", error)
-      return { success: false, error: "位置情報取得の停止に失敗しました" }
-    }
+    await new Promise((resolve) => setTimeout(resolve, 1000))
 
     revalidatePath("/devices")
     return { success: true, message: "位置情報の取得を停止しました" }
@@ -215,11 +150,10 @@ export async function confirmPairing(pairingCode: string, deviceInfo: any) {
       return { success: false, error: "ペアリングコードが必要です" }
     }
 
-    const { data, error } = await supabase.from("devices").select("*").eq("pairing_code", pairingCode).single()
+    // 実際のアプリでは、ここでペアリングコードを検証
+    console.log("Confirming pairing:", pairingCode, deviceInfo)
 
-    if (error || !data) {
-      return { success: false, error: "無効なペアリングコードです" }
-    }
+    await new Promise((resolve) => setTimeout(resolve, 1500))
 
     revalidatePath("/devices")
     return { success: true, message: "デバイスのペアリングが完了しました" }
@@ -236,26 +170,21 @@ export async function getDeviceLocation(deviceId: string) {
       return { success: false, error: "デバイスIDが見つかりません" }
     }
 
-    const { data, error } = await supabase.from("devices").select("*").eq("id", deviceId).single()
-
-    if (error || !data) {
-      return { success: false, error: "位置情報の取得に失敗しました" }
+    // 実際のアプリでは、ここでデバイスから位置情報を取得
+    // モックデータを返す
+    const mockLocation = {
+      latitude: 35.6895 + (Math.random() - 0.5) * 0.01,
+      longitude: 139.6917 + (Math.random() - 0.5) * 0.01,
+      accuracy: Math.floor(Math.random() * 20) + 5,
+      timestamp: new Date().toISOString(),
+      address: "東京都新宿区西新宿付近",
     }
 
-    if (!data.last_location_lat || !data.last_location_lng) {
-      return { success: false, error: "位置情報がまだ取得されていません" }
-    }
+    console.log("Getting device location:", deviceId, mockLocation)
 
-    return {
-      success: true,
-      location: {
-        latitude: data.last_location_lat,
-        longitude: data.last_location_lng,
-        accuracy: 10,
-        timestamp: data.last_location_time,
-        address: "位置情報取得中",
-      },
-    }
+    await new Promise((resolve) => setTimeout(resolve, 500))
+
+    return { success: true, location: mockLocation }
   } catch (error) {
     console.error("Get location error:", error)
     return { success: false, error: "位置情報の取得に失敗しました" }
@@ -269,14 +198,10 @@ export async function updateDeviceStatus(deviceId: string, status: string) {
       return { success: false, error: "デバイスIDと状態が必要です" }
     }
 
-    const isActive = status === "active"
+    // 実際のアプリでは、ここでデバイスの状態を更新
+    console.log("Updating device status:", deviceId, status)
 
-    const { error } = await supabase.from("devices").update({ is_active: isActive }).eq("id", deviceId)
-
-    if (error) {
-      console.error("Supabase error:", error)
-      return { success: false, error: "状態の更新に失敗しました" }
-    }
+    await new Promise((resolve) => setTimeout(resolve, 500))
 
     revalidatePath("/devices")
     return { success: true, message: `デバイスを${status}にしました` }

@@ -1,312 +1,384 @@
 "use client"
 
-import React, { useEffect, useMemo, useState } from "react"
-import dynamic from "next/dynamic"
+import { useState, useEffect } from "react"
 import Link from "next/link"
 import { Button } from "@/components/ui/button"
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card"
-import {
-  MapPin,
-  Bell,
-  Clock,
-  Shield,
-  CheckCircle2,
-  AlertTriangle,
-  Smartphone,
-} from "lucide-react"
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import { Bell, Settings, Clock, Battery, Shield, MapPin, Smartphone, AlertTriangle, CheckCircle } from "lucide-react"
+import MapComponent from "./map-component"
 import { checkSetupStatus } from "./actions/setup"
 
-// 動的 import（SSR OFF）で初期バンドルを軽くする
-const MapComponent = dynamic(() => import("./map-component"), { ssr: false })
-const RealtimeAlerts = dynamic(
-  () => import("@/components/realtime-alerts"),
-  { ssr: false }
-)
-
-type SetupStatus = {
-  isComplete: boolean
-  hasDevice?: boolean
-  hasContacts?: boolean
-  hasGeofence?: boolean
-}
-
-function Loader() {
-  return (
-    <div className="min-h-screen flex items-center justify-center bg-gradient-to-b from-emerald-50 to-white">
-      <div className="text-center">
-        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-emerald-600 mx-auto mb-4"></div>
-        <p className="text-gray-600">読み込み中...</p>
-      </div>
-    </div>
-  )
-}
-
-function SetupItem({
-  Icon,
-  title,
-  desc,
-  done,
-}: {
-  Icon: React.ComponentType<any>
-  title: string
-  desc: string
-  done?: boolean
-}) {
-  return (
-    <div className="flex items-center gap-3 p-3 bg-white rounded-lg border">
-      <Icon className="h-5 w-5 text-gray-600" />
-      <div className="flex-1">
-        <p className="font-medium">{title}</p>
-        <p className="text-xs text-gray-500">{desc}</p>
-      </div>
-      {done ? (
-        <CheckCircle2 className="h-5 w-5 text-emerald-600" />
-      ) : (
-        <div className="w-5 h-5 border-2 border-gray-300 rounded-full"></div>
-      )}
-    </div>
-  )
-}
-
 export default function Home() {
-  // userId は固定（将来的に props や auth から取る）
-  const userId = useMemo(() => "demo-user-001", [])
+  const [setupStatus, setSetupStatus] = useState(null)
+  const [isLoading, setIsLoading] = useState(true)
 
-  const [setupStatus, setSetupStatus] = useState<SetupStatus | null>(null)
-  const [loading, setLoading] = useState(true)
+  // 動的ユーザーID生成
+  const [currentUserId] = useState(() => {
+    if (typeof window !== "undefined") {
+      const existingId = localStorage.getItem("userId")
+      if (existingId) return existingId
 
+      const newId = `user_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`
+      localStorage.setItem("userId", newId)
+      return newId
+    }
+    return `user_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`
+  })
+
+  // 設定状況をチェック
   useEffect(() => {
-    let mounted = true
-
-    const initializeApp = async () => {
+    const checkSetup = async () => {
       try {
-        const result = await checkSetupStatus(userId)
-        if (!mounted) return
-        if (result?.success) {
-          setSetupStatus(result.data as SetupStatus)
-        } else {
-          // 失敗時は空の既定値を入れて UI を整える（必要なら詳細エラー処理）
-          setSetupStatus({ isComplete: false, hasDevice: false, hasContacts: false, hasGeofence: false })
-        }
-      } catch (err) {
-        console.error("checkSetupStatus error:", err)
-        if (mounted) {
-          setSetupStatus({ isComplete: false, hasDevice: false, hasContacts: false, hasGeofence: false })
-        }
+        const result = await checkSetupStatus(currentUserId)
+        setSetupStatus(result.data)
+      } catch (error) {
+        console.error("Setup status check failed:", error)
       } finally {
-        if (mounted) setLoading(false)
+        setIsLoading(false)
       }
     }
 
-    initializeApp()
-    return () => {
-      mounted = false
-    }
-  }, [userId])
+    checkSetup()
+  }, [currentUserId])
 
-  if (loading) return <Loader />
-
-  const status = setupStatus ?? { isComplete: false }
-
-  // 設定項目を配列化（重複 JSX を削減）
-  const setupItems = [
-    {
-      key: "hasDevice",
-      Icon: Smartphone,
-      title: "監視デバイスの登録",
-      desc: "位置情報を取得するデバイス",
-      done: status.hasDevice,
-    },
-    {
-      key: "hasContacts",
-      Icon: Bell,
-      title: "連絡先の設定",
-      desc: "アラートを受け取る連絡先",
-      done: status.hasContacts,
-    },
-    {
-      key: "hasGeofence",
-      Icon: MapPin,
-      title: "安全エリアの設定",
-      desc: "ジオフェンスエリア",
-      done: status.hasGeofence,
-    },
-  ]
-
-  if (!status.isComplete) {
+  if (isLoading) {
     return (
-      <div className="min-h-screen bg-gradient-to-b from-emerald-50 to-white p-4 md:p-8">
-        <div className="max-w-4xl mx-auto">
-          <div className="text-center mb-8">
-            <Shield className="h-16 w-16 text-emerald-600 mx-auto mb-4" />
-            <h1 className="text-4xl font-bold text-gray-900 mb-2">介護見守りアプリ</h1>
-            <p className="text-gray-600">大切な方の安全を見守ります</p>
+      <div className="flex min-h-screen flex-col bg-gray-50">
+        <header className="bg-white border-b">
+          <div className="container mx-auto px-4 py-4 flex items-center justify-between">
+            <div className="flex items-center space-x-2">
+              <Shield className="h-8 w-8 text-emerald-600" />
+              <h1 className="text-2xl font-bold text-gray-900">安心見守りアプリ</h1>
+            </div>
           </div>
-
-          <Card className="border-2 border-emerald-200">
-            <CardHeader className="text-center bg-amber-50">
-              <div className="flex items-center justify-center mb-2">
-                <AlertTriangle className="h-8 w-8 text-amber-600" />
-              </div>
-              <CardTitle className="text-2xl">初期設定が必要です</CardTitle>
-              <CardDescription>アプリを使用する前に、以下の設定を完了してください</CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-4 p-6">
-              <div className="space-y-3">
-                {setupItems.map((it) => (
-                  <SetupItem
-                    key={it.key}
-                    Icon={it.Icon}
-                    title={it.title}
-                    desc={it.desc}
-                    done={it.done}
-                  />
-                ))}
-              </div>
-
-              <div className="bg-emerald-50 p-4 rounded-lg border border-emerald-200">
-                <h3 className="font-semibold mb-2 flex items-center text-emerald-900">
-                  <CheckCircle2 className="h-5 w-5 mr-2" />
-                  設定完了後の機能
-                </h3>
-                <ul className="space-y-1 ml-7 text-sm text-emerald-800">
-                  <li>• リアルタイム位置追跡</li>
-                  <li>• 安全エリア外アラート</li>
-                  <li>• 緊急時自動通知</li>
-                  <li>• 移動履歴レポート</li>
-                </ul>
-              </div>
-
-              <Link href="/setup">
-                <Button className="w-full" size="lg">
-                  初期設定を開始する
-                </Button>
-              </Link>
-            </CardContent>
-          </Card>
-        </div>
+        </header>
+        <main className="flex-1 flex items-center justify-center">
+          <div className="text-center">
+            <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-emerald-600 mx-auto mb-4"></div>
+            <p className="text-gray-600">設定状況を確認中...</p>
+          </div>
+        </main>
       </div>
     )
   }
 
-  // 完了後のUI（重複を減らした形）
-  return (
-    <div className="min-h-screen bg-gradient-to-b from-emerald-50 to-white p-4 md:p-8">
-      <RealtimeAlerts userId={userId} />
+  // 設定が未完了の場合は設定画面に誘導
+  if (!setupStatus?.isComplete) {
+    return (
+      <div className="flex min-h-screen flex-col bg-gray-50">
+        <header className="bg-white border-b">
+          <div className="container mx-auto px-4 py-4 flex items-center justify-between">
+            <div className="flex items-center space-x-2">
+              <Shield className="h-8 w-8 text-emerald-600" />
+              <h1 className="text-2xl font-bold text-gray-900">安心見守りアプリ</h1>
+            </div>
+          </div>
+        </header>
 
-      <div className="max-w-6xl mx-auto space-y-6">
-        <div className="text-center mb-8">
-          <Shield className="h-12 w-12 text-emerald-600 mx-auto mb-2" />
-          <h1 className="text-4xl font-bold text-gray-900 mb-2">介護見守りアプリ</h1>
-          <p className="text-gray-600">リアルタイムで位置情報を追跡</p>
-        </div>
+        <main className="flex-1 container mx-auto px-4 py-8">
+          <div className="max-w-2xl mx-auto">
+            <div className="text-center mb-8">
+              <div className="p-4 bg-amber-50 rounded-full w-20 h-20 mx-auto mb-4 flex items-center justify-center">
+                <AlertTriangle className="h-10 w-10 text-amber-600" />
+              </div>
+              <h2 className="text-2xl font-bold text-gray-900 mb-2">初期設定が必要です</h2>
+              <p className="text-gray-600">
+                安心見守りアプリをご利用いただくには、デバイスの登録と連絡先の設定が必要です。
+              </p>
+            </div>
 
-        <div className="grid md:grid-cols-4 gap-4 mb-6">
-          <Card>
-            <CardHeader className="pb-3">
-              <CardTitle className="text-sm font-medium flex items-center">
-                <MapPin className="h-4 w-4 mr-2 text-emerald-600" />
-                現在地
-              </CardTitle>
-            </CardHeader>
-            <CardContent>
-              <p className="text-2xl font-bold text-emerald-600">追跡可能</p>
-              <p className="text-xs text-gray-500 mt-1">リアルタイム更新</p>
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardHeader className="pb-3">
-              <CardTitle className="text-sm font-medium flex items-center">
-                <Bell className="h-4 w-4 mr-2 text-blue-600" />
-                アラート
-              </CardTitle>
-            </CardHeader>
-            <CardContent>
-              <p className="text-2xl font-bold text-blue-600">0件</p>
-              <p className="text-xs text-gray-500 mt-1">未解決のアラート</p>
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardHeader className="pb-3">
-              <CardTitle className="text-sm font-medium flex items-center">
-                <Shield className="h-4 w-4 mr-2 text-purple-600" />
-                安全エリア
-              </CardTitle>
-            </CardHeader>
-            <CardContent>
-              <p className="text-2xl font-bold text-purple-600">エリア内</p>
-              <p className="text-xs text-gray-500 mt-1">設定エリア内</p>
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardHeader className="pb-3">
-              <CardTitle className="text-sm font-medium flex items-center">
-                <Clock className="h-4 w-4 mr-2 text-orange-600" />
-                最終更新
-              </CardTitle>
-            </CardHeader>
-            <CardContent>
-              <p className="text-2xl font-bold text-orange-600">たった今</p>
-              <p className="text-xs text-gray-500 mt-1">自動更新中</p>
-            </CardContent>
-          </Card>
-        </div>
-
-        <MapComponent userId={userId} />
-
-        <div className="grid md:grid-cols-3 gap-4">
-          <Link href="/alerts">
-            <Card className="hover:shadow-lg transition-shadow cursor-pointer h-full">
+            <Card className="mb-6">
               <CardHeader>
-                <CardTitle className="flex items-center">
-                  <Bell className="h-5 w-5 mr-2" />
-                  アラート
-                </CardTitle>
+                <CardTitle>設定の進行状況</CardTitle>
+                <CardDescription>以下の設定を完了してください</CardDescription>
               </CardHeader>
               <CardContent>
-                <p className="text-sm text-gray-600">アラート履歴と通知設定</p>
-              </CardContent>
-            </Card>
-          </Link>
+                <div className="space-y-4">
+                  <div className="flex items-center justify-between p-3 border rounded-lg">
+                    <div className="flex items-center">
+                      <div className="p-2 bg-gray-100 rounded-full mr-3">
+                        <Smartphone className="h-5 w-5 text-gray-600" />
+                      </div>
+                      <div>
+                        <p className="font-medium">見守りデバイスの登録</p>
+                        <p className="text-sm text-gray-500">位置情報を取得するデバイスを登録</p>
+                      </div>
+                    </div>
+                    <div className="flex items-center">
+                      {setupStatus?.hasDevice ? (
+                        <CheckCircle className="h-5 w-5 text-emerald-600" />
+                      ) : (
+                        <div className="w-5 h-5 border-2 border-gray-300 rounded-full"></div>
+                      )}
+                    </div>
+                  </div>
 
-          <Link href="/history">
-            <Card className="hover:shadow-lg transition-shadow cursor-pointer h-full">
-              <CardHeader>
-                <CardTitle className="flex items-center">
-                  <Clock className="h-5 w-5 mr-2" />
-                  移動履歴
-                </CardTitle>
-              </CardHeader>
-              <CardContent>
-                <p className="text-sm text-gray-600">過去の移動記録を確認</p>
-              </CardContent>
-            </Card>
-          </Link>
+                  <div className="flex items-center justify-between p-3 border rounded-lg">
+                    <div className="flex items-center">
+                      <div className="p-2 bg-gray-100 rounded-full mr-3">
+                        <Bell className="h-5 w-5 text-gray-600" />
+                      </div>
+                      <div>
+                        <p className="font-medium">通知連絡先の設定</p>
+                        <p className="text-sm text-gray-500">アラートを受け取る連絡先を設定</p>
+                      </div>
+                    </div>
+                    <div className="flex items-center">
+                      {setupStatus?.hasContacts ? (
+                        <CheckCircle className="h-5 w-5 text-emerald-600" />
+                      ) : (
+                        <div className="w-5 h-5 border-2 border-gray-300 rounded-full"></div>
+                      )}
+                    </div>
+                  </div>
 
-          <Link href="/geofence">
-            <Card className="hover:shadow-lg transition-shadow cursor-pointer h-full">
-              <CardHeader>
-                <CardTitle className="flex items-center">
-                  <MapPin className="h-5 w-5 mr-2" />
-                  エリア設定
-                </CardTitle>
-              </CardHeader>
-              <CardContent>
-                <p className="text-sm text-gray-600">安全エリアの設定と管理</p>
+                  <div className="flex items-center justify-between p-3 border rounded-lg">
+                    <div className="flex items-center">
+                      <div className="p-2 bg-gray-100 rounded-full mr-3">
+                        <MapPin className="h-5 w-5 text-gray-600" />
+                      </div>
+                      <div>
+                        <p className="font-medium">安全エリアの設定</p>
+                        <p className="text-sm text-gray-500">ジオフェンスエリアを設定</p>
+                      </div>
+                    </div>
+                    <div className="flex items-center">
+                      {setupStatus?.hasGeofence ? (
+                        <CheckCircle className="h-5 w-5 text-emerald-600" />
+                      ) : (
+                        <div className="w-5 h-5 border-2 border-gray-300 rounded-full"></div>
+                      )}
+                    </div>
+                  </div>
+                </div>
+
+                <div className="mt-6 p-4 bg-blue-50 rounded-lg border border-blue-200">
+                  <div className="flex items-start">
+                    <Shield className="h-5 w-5 text-blue-600 mr-2 mt-0.5" />
+                    <div>
+                      <p className="text-sm font-medium text-blue-800">設定完了後の機能</p>
+                      <ul className="text-xs text-blue-600 mt-1 space-y-1">
+                        <li>• リアルタイム位置追跡</li>
+                        <li>• 安全エリア外アラート</li>
+                        <li>• 緊急時自動通知</li>
+                        <li>• 移動履歴レポート</li>
+                      </ul>
+                    </div>
+                  </div>
+                </div>
               </CardContent>
             </Card>
-          </Link>
-        </div>
+
+            <div className="space-y-4">
+              {!setupStatus?.hasDevice && (
+                <Link href="/setup/device" className="block">
+                  <Button className="w-full h-12 text-lg">
+                    <Smartphone className="h-5 w-5 mr-2" />
+                    見守りデバイスを登録する
+                  </Button>
+                </Link>
+              )}
+
+              {setupStatus?.hasDevice && !setupStatus?.hasContacts && (
+                <Link href="/setup/contacts" className="block">
+                  <Button className="w-full h-12 text-lg">
+                    <Bell className="h-5 w-5 mr-2" />
+                    通知連絡先を設定する
+                  </Button>
+                </Link>
+              )}
+
+              {setupStatus?.hasDevice && setupStatus?.hasContacts && !setupStatus?.hasGeofence && (
+                <Link href="/setup/geofence" className="block">
+                  <Button className="w-full h-12 text-lg">
+                    <MapPin className="h-5 w-5 mr-2" />
+                    安全エリアを設定する
+                  </Button>
+                </Link>
+              )}
+
+              <Link href="/setup" className="block">
+                <Button variant="outline" className="w-full bg-transparent">
+                  設定ウィザードを開始
+                </Button>
+              </Link>
+            </div>
+          </div>
+        </main>
       </div>
+    )
+  }
+
+  // 設定完了後のメイン画面
+  return (
+    <div className="flex min-h-screen flex-col bg-gray-50">
+      <header className="bg-white border-b">
+        <div className="container mx-auto px-4 py-4 flex items-center justify-between">
+          <div className="flex items-center space-x-2">
+            <Shield className="h-8 w-8 text-emerald-600" />
+            <h1 className="text-2xl font-bold text-gray-900">安心見守りアプリ</h1>
+          </div>
+          <nav>
+            <Button variant="ghost" size="sm">
+              ログアウト
+            </Button>
+          </nav>
+        </div>
+      </header>
+
+      <main className="flex-1 container mx-auto px-4 py-8">
+        <section className="mb-8">
+          <div className="flex items-center justify-between mb-6">
+            <h2 className="text-2xl font-bold text-gray-900">ダッシュボード</h2>
+            <div className="flex items-center space-x-2">
+              <div className="text-sm font-medium text-emerald-600 bg-emerald-50 px-3 py-1 rounded-full flex items-center">
+                <div className="w-2 h-2 bg-emerald-600 rounded-full mr-2 animate-pulse"></div>
+                オンライン
+              </div>
+              <Button variant="outline" size="sm">
+                更新
+              </Button>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+            <Card className="md:col-span-2">
+              <CardHeader className="pb-2">
+                <CardTitle>現在位置</CardTitle>
+                <CardDescription>最終更新: 2分前</CardDescription>
+              </CardHeader>
+              <CardContent>
+                <MapComponent />
+              </CardContent>
+            </Card>
+
+            <div className="space-y-6">
+              <Card>
+                <CardHeader className="pb-2">
+                  <CardTitle className="flex items-center justify-between">
+                    <span>アラート状況</span>
+                    <Bell className="h-5 w-5 text-amber-500" />
+                  </CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <div className="space-y-4">
+                    <div className="p-3 bg-green-50 rounded-md border border-green-100">
+                      <p className="text-sm font-medium text-green-800">安全エリア内</p>
+                      <p className="text-xs text-green-600">自宅エリア内にいます</p>
+                    </div>
+                    <Link href="/alerts" className="text-sm text-emerald-600 hover:underline block">
+                      アラート履歴を表示 →
+                    </Link>
+                  </div>
+                </CardContent>
+              </Card>
+
+              <Card>
+                <CardHeader className="pb-2">
+                  <CardTitle className="flex items-center justify-between">
+                    <span>デバイス状態</span>
+                    <Battery className="h-5 w-5 text-emerald-500" />
+                  </CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <div className="space-y-3">
+                    <div>
+                      <div className="flex justify-between text-sm mb-1">
+                        <span>バッテリー</span>
+                        <span className="font-medium">78%</span>
+                      </div>
+                      <div className="w-full bg-gray-200 rounded-full h-2">
+                        <div className="bg-emerald-500 h-2 rounded-full" style={{ width: "78%" }}></div>
+                      </div>
+                      <p className="text-xs text-gray-500 mt-1">残り約4日</p>
+                    </div>
+                    <div>
+                      <div className="flex justify-between text-sm mb-1">
+                        <span>GPS信号</span>
+                        <span className="font-medium text-emerald-600">良好</span>
+                      </div>
+                      <div className="flex space-x-1">
+                        {[1, 2, 3, 4].map((i) => (
+                          <div
+                            key={i}
+                            className={`h-2 w-full rounded-full ${i <= 3 ? "bg-emerald-500" : "bg-gray-200"}`}
+                          ></div>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                </CardContent>
+              </Card>
+            </div>
+          </div>
+        </section>
+
+        <section>
+          <h2 className="text-xl font-bold text-gray-900 mb-6">クイックアクセス</h2>
+          <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
+            {[
+              {
+                title: "デバイス管理",
+                icon: <Smartphone className="h-6 w-6" />,
+                href: "/devices",
+                color: "bg-emerald-50 text-emerald-600",
+              },
+              {
+                title: "ジオフェンス設定",
+                icon: <MapPin className="h-6 w-6" />,
+                href: "/geofence",
+                color: "bg-blue-50 text-blue-600",
+              },
+              {
+                title: "通知設定",
+                icon: <Bell className="h-6 w-6" />,
+                href: "/notifications",
+                color: "bg-amber-50 text-amber-600",
+              },
+              {
+                title: "履歴・レポート",
+                icon: <Clock className="h-6 w-6" />,
+                href: "/history",
+                color: "bg-purple-50 text-purple-600",
+              },
+              {
+                title: "設定",
+                icon: <Settings className="h-6 w-6" />,
+                href: "/settings",
+                color: "bg-gray-50 text-gray-600",
+              },
+            ].map((item, i) => (
+              <Link
+                key={i}
+                href={item.href}
+                className="flex flex-col items-center p-6 rounded-lg border hover:border-emerald-200 hover:bg-emerald-50 transition-colors"
+              >
+                <div className={`p-3 rounded-full mb-3 ${item.color}`}>{item.icon}</div>
+                <span className="text-sm font-medium">{item.title}</span>
+              </Link>
+            ))}
+          </div>
+        </section>
+      </main>
+
+      <footer className="bg-white border-t py-6">
+        <div className="container mx-auto px-4">
+          <div className="flex flex-col md:flex-row justify-between items-center">
+            <p className="text-sm text-gray-500">© 2025 安心見守りアプリ. All rights reserved.</p>
+            <div className="flex space-x-4 mt-4 md:mt-0">
+              <Button variant="link" size="sm">
+                プライバシーポリシー
+              </Button>
+              <Button variant="link" size="sm">
+                利用規約
+              </Button>
+              <Button variant="link" size="sm">
+                サポート
+              </Button>
+            </div>
+          </div>
+        </div>
+      </footer>
     </div>
   )
 }
